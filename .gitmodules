@@ -1,0 +1,15 @@
+[submodule "third_party/cpp-base"]
+	path = third_party/cpp-base
+	url = https://github.com/establishment/cpp-base
+    branch = master
+
+[submodule "third_party/autojson"]
+	path = third_party/autojson
+	url = https://github.com/establishment/autojson
+    branch = master
+
+[submodule "third_party/cxxopts"]
+	path = third_party/cxxopts
+    url = https://github.com/jarro2783/cxxopts
+    branch = master
+
