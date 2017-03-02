@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include <string>
+#include <vector>
 
 #include "config_json_impl.hpp"
 #include "lib.hpp"
@@ -46,6 +47,70 @@ struct CommandLineConfig : public ProcessConfig {
     double extraTimeS;
     double checkIntervalS;
 };
+
+vector<string> all_options = {"box-id",      "process-id", "verbose",   "meta",       "time",         "wall-time",
+                              "extra-time",  "memory",     "stack",     "stdin",      "stdout",       "stderr",
+                              "interactive", "full-env",   "env",       "permission", "quota-blocks", "quota-inodes",
+                              "file-size",   "chdir",      "share-net", "processes",  "init",         "run",
+                              "cleanup",     "help"};
+
+int LevenshteinDistance(const string& a, const string& b) {
+    vector<vector<int>> d(a.size() + 1, vector<int>(b.size() + 1, 0));
+    for (int i = 1; i <= (int)a.size(); i += 1) {
+        d[i][0] = i;
+    }
+
+    for (int i = 1; i <= (int)b.size(); i += 1) {
+        d[0][i] = i;
+    }
+
+    for (int i = 1; i <= (int)a.size(); i += 1) {
+        for (int j = 1; j <= (int)b.size(); j += 1) {
+            d[i][j] = min({d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1)});
+        }
+    }
+
+    return d[a.size()][b.size()];
+}
+
+string ClosestOption(const string& wrong_option) {
+    int mn_distance = 1e9;
+    string result = "";
+
+    for (const string& option : all_options) {
+        vector<string> small_words;
+        string current_word = "";
+        for (char itr : option) {
+            if (itr == '-') {
+                small_words.push_back(current_word);
+                current_word = "";
+            } else {
+                current_word += itr;
+            }
+        }
+
+        small_words.push_back(current_word);
+        vector<int> perm;
+        for (int i = 0; i < (int)small_words.size(); i += 1) {
+            perm.push_back(i);
+        }
+
+        do {
+            string new_option = "";
+            for (auto itr : perm) {
+                new_option += small_words[itr] + "-";
+            }
+            new_option.pop_back();
+            auto current_distance = LevenshteinDistance(wrong_option, new_option);
+            if (current_distance < mn_distance) {
+                mn_distance = current_distance;
+                result = option;
+            }
+        } while (next_permutation(perm.begin(), perm.end()));
+    }
+
+    return result;
+}
 
 cxxopts::Options AddOptions(CommandLineConfig& config) {
     cxxopts::Options options("SANDbox MANager");
@@ -92,11 +157,11 @@ cxxopts::Options AddOptions(CommandLineConfig& config) {
 
     options.add_options("Redirects")(  //
         "stdout", "Redirect stdout to <FILE> (empty = no redirect)",
-        cxxopts::value<string>(config.redirectStdin)->default_value("")->implicit_value("stdout.txt"), "FILE");
+        cxxopts::value<string>(config.redirectStdout)->default_value("")->implicit_value("stdout.txt"), "FILE");
 
     options.add_options("Redirects")(  //
         "stderr", "Redirect stderr to <FILE> (empty = no redirect)",
-        cxxopts::value<string>(config.redirectStdin)->default_value("")->implicit_value("stderr.txt"), "FILE");
+        cxxopts::value<string>(config.redirectStderr)->default_value("")->implicit_value("stderr.txt"), "FILE");
 
     options.add_options("Redirects")(  //
         "interactive",
@@ -135,7 +200,7 @@ cxxopts::Options AddOptions(CommandLineConfig& config) {
 
     options.add_options("Rules")(  //
         "processes", "Enable multiple processes (at most <max> of them) (0 is unlimited)",
-        cxxopts::value<int>(config.maxProcesses)->default_value("0"), "max");
+        cxxopts::value<int>(config.maxProcesses)->default_value("1")->implicit_value("0"), "max");
 
     options.add_options()("i,init", "Initialize sandbox");
     options.add_options()("r,run", "Run given command in sandbox (positional arguments)");
@@ -160,8 +225,32 @@ ProcessConfig ParseCommandLineArguments(int argc, char** argv) {
             std::cout << options.help({"", "Config", "Time", "Memory", "Redirects", "Rules"}) << std::endl;
             exit(0);
         }
+    } catch (const cxxopts::option_not_exists_exception& e) {
+        auto GetOption = [](const string& exception_message) {
+            string result = "";
+            bool quoted = false;
+            for (char32_t  c : exception_message) {
+                if (c == 4294967266) {
+                    quoted = false;
+                }               
+
+                if (quoted) {
+                    result += c;
+                }
+
+                if (c == 4294967192) {
+                    quoted = true;
+                }
+            }
+
+            return result;
+        };
+        
+        
+        std::cout << e.what() << u8". Did you mean ‘" << ClosestOption(GetOption(e.what())) << u8"’?\n";
+        exit(1);
     } catch (const cxxopts::OptionException& e) {
-        std::cout << "error parsing options: " << e.what() << std::endl;
+        std::cout << "error parsing options: " << e.what() << "\n";
         exit(1);
     }
 
@@ -208,7 +297,8 @@ ProcessConfig ParseCommandLineArguments(int argc, char** argv) {
 int main(int argc, char** argv) {
     auto config = ParseCommandLineArguments(argc, argv);
 
-    DieLogToFile("/eval/isolate.log");
+    Msg("%s\n", Json(config).Stringify(false).c_str());
+
     if (config.mode == ProcessConfig::kUnspecified) {
         Die("Please specify an isolate command (e.g. --init, --run).");
     }
@@ -226,6 +316,8 @@ int main(int argc, char** argv) {
         config.mode != ProcessConfig::kCleanup) {
         Die("Internal error: mode mismatch");
     }
+
+    DieLogToFile("/eval/isolate.log");
 
     Jailer jailer(config, argv + optind);  /// share the stack size with the isolated process.);
     jailer.Start();
