@@ -130,7 +130,7 @@ class RunStats {
     }
 };
 
-const std::string RunStats::version = "2.0";
+const std::string RunStats::version = "2.1";
 
 template<>
 void RunStats::update(const rusage& usage) {

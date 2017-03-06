@@ -52,6 +52,7 @@ AutoJson::Json::Json(const ::RunStats& rhs) : type(JsonType::OBJECT), content(ne
 	(*this)["processWasKilled"] = rhs.processWasKilled;
 	(*this)["resultCode"] = rhs.resultCode;
 	(*this)["internalMessage"] = rhs.internalMessage;
+	(*this)["version"] = rhs.version;
 }
 
 template<>
