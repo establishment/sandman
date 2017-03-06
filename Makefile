@@ -1,5 +1,6 @@
 build:
 	$(MAKE) -s get-submodules
+	$(MAKE) -s remove-symlinks
 	$(MAKE) -s symlinks
 	g++ -std=c++11 -O2 -rdynamic src/bin.cpp -o box
 	$(MAKE) -s remove-symlinks
