@@ -446,6 +446,8 @@ int ProcessInitialiser::ASyncStart(void* args) {
     ProcessInitialiser* initialiser = (ProcessInitialiser*)args;
     initialiser->setupSystem();
 
+    Msg("Provided run command:%s\n", initialiser->config.runCommand.c_str());
+
     char** processArgs = Base::StringToCharSS(Base::ParseCommandLine(initialiser->config.runCommand));
     auto environment = Rules::Environment(initialiser->config.environment);
     char** env = environment.getEnvironment();
@@ -456,8 +458,15 @@ int ProcessInitialiser::ASyncStart(void* args) {
     /// * cgroup id (associated with limits)
     /// * pwd, relative root
     /// all these limitations can't be enlarged, only reduced/shrinked
-    execve(processArgs[0], processArgs, env);
-    Die("execve(\"%s\"): %m", processArgs[0]);
+
+    char** c = processArgs;
+    while (*c != nullptr) {
+        Msg("Run command:\t%s\n", *c);
+        c++;
+    }
+
+    execvpe(processArgs[0], processArgs, env);
+    Die("execvpe(%s): %m", processArgs[0]);
 
     return 0;
 }

@@ -288,7 +288,7 @@ ProcessConfig ParseCommandLineArguments(int argc, char** argv) {
 
     /// add positional arguments
     for (const string& word : positional) {
-        p_config.runCommand += word + " ";
+        p_config.runCommand += "\"" + word + "\"" + " ";
     }
 
     return p_config;
@@ -296,8 +296,6 @@ ProcessConfig ParseCommandLineArguments(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     auto config = ParseCommandLineArguments(argc, argv);
-
-    Msg("%s\n", Json(config).Stringify(false).c_str());
 
     if (config.mode == ProcessConfig::kUnspecified) {
         Die("Please specify an isolate command (e.g. --init, --run).");
