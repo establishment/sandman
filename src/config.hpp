@@ -15,7 +15,6 @@ struct ProcessConfig {
     };
 
     struct Environment {
-      public:
         int useDefaultRules;   /// LIBC_FATAL_STDERR_=1
         int passEnvironment;   /// --full-env      inherit environment from system
         vector<string> rules;  /// --env=a=b       custom rules for environment
@@ -29,10 +28,8 @@ struct ProcessConfig {
     struct DirRules {};
 
     struct DiskQuota {
-      public:
-        /// --quota=<blockQuota>,<inodeQuota>
-        int blockQuota;  /// limit on disk quota blocks alloc. 0 = unlimited.
-        int inodeQuota;  /// number of allocated inodes
+        int blockQuota;  /// --quota-blocks limit on disk quota blocks alloc. 0 = unlimited.
+        int inodeQuota;  /// --quota-inodes number of allocated inodes
 
         DiskQuota() {
             blockQuota = 0;
@@ -51,51 +48,40 @@ struct ProcessConfig {
 
     /// basic configs
     int mode;       /// --init --run --cleanup
-    int boxId;      /// --box-id=x      id of the sandbox and cgroup. Needs to be
-                    /// specified.
-    int processId;  /// --processId=x   specify if 2 tasks are run in the same box
-    ///                     but with access to different limits. Default=0;
+    int boxId;      /// --box-id=x      id of the sandbox and cgroup. Needs to be specified.
+    int processId;  /// --processId=x   specify if 2 tasks are run in the same box but with access to different limits.
+                    /// Default=0;
 
     /// logger config
-    int verboseLevel;  /// --verbose       increases the value by 1
-    string metaFile;   /// --meta=file.txt specify the path for the meta file (the
-                       /// stats).
-                       ///                     relative to the run location
+    int verboseLevel;  /// --verbose       set verbosity value
+    string metaFile;   /// --meta=file.txt specify the path for the meta file (the stats). relative to the run location
 
     /// time limits
-    unsigned long long cpuTimeLimitMs;   /// --time=x        CPU (user + system)
-                                         /// time limit to x seconds
-    unsigned long long wallTimeLimitMs;  /// --wall-time=x   Wall time limit to x seconds
-    unsigned long long extraTimeMs;      /// --extra-time=x  kill after any of the
-                                         /// times reach setValue + extraTime
-    unsigned long long checkIntervalMs;  /// time in ms between 2 checks of the
-                                         /// sandbox process status
+    unsigned long long cpuTimeLimitMs;   /// --time=x       CPU (user + system) time limit to x seconds
+    unsigned long long wallTimeLimitMs;  /// --wall-time=x  Wall time limit to x seconds
+    unsigned long long extraTimeMs;      /// --extra-time=x kill after any of the times reach setValue + extraTime
+    unsigned long long checkIntervalMs;  ///                time in ms between 2 checks of the sandbox process status
 
     /// memory limits
-    int memoryLimitKB;  /// --memory=x          memory limit to x KB. Default =
-                        /// unlimited
-    int stackLimitKB;   /// --stack=x           stack limit to x KB. Default =
-                        /// unlimited
+    int memoryLimitKB;  /// --memory=x          memory limit to x KB. Default = unlimited
+    int stackLimitKB;   /// --stack=x           stack limit to x KB. Default = unlimited
 
     /// files
     string redirectStdin;   /// --stdin=file.txt    redirect stdin to this
     string redirectStdout;  /// --stdout=file.txt   redirect stdout to this
     string redirectStderr;  /// --stderr=file.txt   redirect stderr to this
     string execDirectory;   /// --chdir=dif         process will be run from dis dir
-    int fileSizeLimitKB;    /// --file-size=x       limit file size to x KB. Default
-                            /// = unlimited
+    int fileSizeLimitKB;    /// --file-size=x       limit file size to x KB. Default = unlimited
 
     /// misc
-    int maxProcesses;  /// --processes{=x}     max number of processes that can be
-                       /// created from process.
-    ///                         default = 1, unspecified value = unlimited
-    int shareNetwork;        /// --share-net         if specified, the process will share
-                             /// network access from parent
-    bool swapPipeOpenOrder;  /// --interactive       open stdout first, then stdin.
-                             /// Blocking call for fifo
+    int maxProcesses;  /// --processes{=x}  max number of processes that can be created from process. default = 1,
+                       /// unspecified value = unlimited
+    int shareNetwork;  /// --share-net      if specified, the process will share network access from parent
 
-    string runCommand;  /// last argumet of command line. The command which will be
-                        /// run in box
+    bool swapPipeOpenOrder;  /// --interactive  open stdout first, then stdin. Avoid fifo blocking open.
+    bool legacyMetaJson;     /// --legacy-json  prints meta file in old format (version 2.0)
+
+    string runCommand;  /// last argumet of command line. The command which will be run in box
 
     /// rules for stuff
     Environment environment;

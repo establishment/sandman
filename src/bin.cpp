@@ -48,11 +48,11 @@ struct CommandLineConfig : public ProcessConfig {
     double checkIntervalS;
 };
 
-vector<string> all_options = {"box-id",      "process-id", "verbose",   "meta",       "time",         "wall-time",
-                              "extra-time",  "memory",     "stack",     "stdin",      "stdout",       "stderr",
-                              "interactive", "full-env",   "env",       "permission", "quota-blocks", "quota-inodes",
-                              "file-size",   "chdir",      "share-net", "processes",  "init",         "run",
-                              "cleanup",     "help"};
+vector<string> all_options = {
+    "box-id",    "process-id", "verbose",      "meta",         "time",      "wall-time",       "extra-time",
+    "memory",    "stack",      "stdin",        "stdout",       "stderr",    "interactive",     "full-env",
+    "env",       "permission", "quota-blocks", "quota-inodes", "file-size", "chdir",           "share-net",
+    "processes", "init",       "run",          "cleanup",      "help",      "legacy-meta-json"};
 
 int LevenshteinDistance(const string& a, const string& b) {
     vector<vector<int>> d(a.size() + 1, vector<int>(b.size() + 1, 0));
@@ -202,6 +202,9 @@ cxxopts::Options AddOptions(CommandLineConfig& config) {
         "processes", "Enable multiple processes (at most <max> of them) (0 is unlimited)",
         cxxopts::value<int>(config.maxProcesses)->default_value("1")->implicit_value("0"), "max");
 
+    options.add_options("Rules")(  //
+        "legacy-meta-json", "Print meta file in old format");
+
     options.add_options()("i,init", "Initialize sandbox");
     options.add_options()("r,run", "Run given command in sandbox (positional arguments)");
     options.add_options()("cleanup", "Clean up sandbox");
@@ -267,6 +270,10 @@ ProcessConfig ParseCommandLineArguments(int argc, char** argv) {
 
     if (options.count("share-net")) {
         p_config.shareNetwork = true;
+    }
+
+    if (options.count("legacy-meta-json")) {
+        p_config.legacyMetaJson = true;
     }
 
     if (options.count("init")) {

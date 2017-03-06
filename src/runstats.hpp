@@ -123,7 +123,7 @@ class RunStats {
                 '\t',   "\"exitCode\": ",           exitCode, ",\n",
                 '\t',   "\"processWasKilled\": ",   processWasKilled, ",\n",
                 '\t',   "\"resultCode\": ",         resultCode, ",\n",
-                '\t',   "\"version\": ",            "\"", version, "\"", ",\n",
+                '\t',   "\"version\": ",            "\"", "2.0", "\"", ",\n",
                 '\t',   "\"internalMessage\": ",    "\"", internalMessage, "\"", "\n",
                 "}\n"
             );

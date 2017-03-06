@@ -23,8 +23,8 @@ AutoJson::Json::Json(const ::ProcessConfig::DiskQuota& rhs) : type(JsonType::OBJ
 template<>
 AutoJson::Json::operator ::ProcessConfig::DiskQuota() {
 	::ProcessConfig::DiskQuota obj;
-	obj.blockQuota = this->operator[]("blockQuota").Get<int>();
-	obj.inodeQuota = this->operator[]("inodeQuota").Get<int>();
+	obj.blockQuota = (*this)["blockQuota"].Get<int>();
+	obj.inodeQuota = (*this)["inodeQuota"].Get<int>();
 	return obj;
 }
 }  //namespace AutoJson
@@ -40,9 +40,9 @@ AutoJson::Json::Json(const ::ProcessConfig::Environment& rhs) : type(JsonType::O
 template<>
 AutoJson::Json::operator ::ProcessConfig::Environment() {
 	::ProcessConfig::Environment obj;
-	obj.useDefaultRules = this->operator[]("useDefaultRules").Get<int>();
-	obj.passEnvironment = this->operator[]("passEnvironment").Get<int>();
-	obj.rules = this->operator[]("rules").Get<vector<string>>();
+	obj.useDefaultRules = (*this)["useDefaultRules"].Get<int>();
+	obj.passEnvironment = (*this)["passEnvironment"].Get<int>();
+	obj.rules = (*this)["rules"].Get<vector<string>>();
 	return obj;
 }
 }  //namespace AutoJson
@@ -57,8 +57,22 @@ AutoJson::Json::Json(const ::ProcessConfig::FilePermissions& rhs) : type(JsonTyp
 template<>
 AutoJson::Json::operator ::ProcessConfig::FilePermissions() {
 	::ProcessConfig::FilePermissions obj;
-	obj.rules = this->operator[]("rules").Get<vector<string>>();
-	obj.fullPermissionsOverFolder = this->operator[]("fullPermissionsOverFolder").Get<int>();
+	obj.rules = (*this)["rules"].Get<vector<string>>();
+	obj.fullPermissionsOverFolder = (*this)["fullPermissionsOverFolder"].Get<int>();
+	return obj;
+}
+}  //namespace AutoJson
+
+namespace AutoJson {
+template<>
+AutoJson::Json::Json(__attribute__((unused)) const ::ProcessConfig::Modes& rhs) : type(JsonType::OBJECT), content(new std::map<std::string, Json>()) {
+	(*this) = int(rhs);
+}
+
+template<>
+AutoJson::Json::operator ::ProcessConfig::Modes() {
+	::ProcessConfig::Modes obj;
+	obj = ::ProcessConfig::Modes((*this).Get<int>());
 	return obj;
 }
 }  //namespace AutoJson
@@ -85,6 +99,7 @@ AutoJson::Json::Json(const ::ProcessConfig& rhs) : type(JsonType::OBJECT), conte
 	(*this)["maxProcesses"] = rhs.maxProcesses;
 	(*this)["shareNetwork"] = rhs.shareNetwork;
 	(*this)["swapPipeOpenOrder"] = rhs.swapPipeOpenOrder;
+	(*this)["legacyMetaJson"] = rhs.legacyMetaJson;
 	(*this)["runCommand"] = rhs.runCommand;
 	(*this)["environment"] = rhs.environment;
 	(*this)["dirRules"] = rhs.dirRules;
@@ -95,30 +110,31 @@ AutoJson::Json::Json(const ::ProcessConfig& rhs) : type(JsonType::OBJECT), conte
 template<>
 AutoJson::Json::operator ::ProcessConfig() {
 	::ProcessConfig obj;
-	obj.mode = this->operator[]("mode").Get<int>();
-	obj.boxId = this->operator[]("boxId").Get<int>();
-	obj.processId = this->operator[]("processId").Get<int>();
-	obj.verboseLevel = this->operator[]("verboseLevel").Get<int>();
-	obj.metaFile = this->operator[]("metaFile").Get<string>();
-	obj.cpuTimeLimitMs = this->operator[]("cpuTimeLimitMs").Get<unsigned long long>();
-	obj.wallTimeLimitMs = this->operator[]("wallTimeLimitMs").Get<unsigned long long>();
-	obj.extraTimeMs = this->operator[]("extraTimeMs").Get<unsigned long long>();
-	obj.checkIntervalMs = this->operator[]("checkIntervalMs").Get<unsigned long long>();
-	obj.memoryLimitKB = this->operator[]("memoryLimitKB").Get<int>();
-	obj.stackLimitKB = this->operator[]("stackLimitKB").Get<int>();
-	obj.redirectStdin = this->operator[]("redirectStdin").Get<string>();
-	obj.redirectStdout = this->operator[]("redirectStdout").Get<string>();
-	obj.redirectStderr = this->operator[]("redirectStderr").Get<string>();
-	obj.execDirectory = this->operator[]("execDirectory").Get<string>();
-	obj.fileSizeLimitKB = this->operator[]("fileSizeLimitKB").Get<int>();
-	obj.maxProcesses = this->operator[]("maxProcesses").Get<int>();
-	obj.shareNetwork = this->operator[]("shareNetwork").Get<int>();
-	obj.swapPipeOpenOrder = this->operator[]("swapPipeOpenOrder").Get<bool>();
-	obj.runCommand = this->operator[]("runCommand").Get<string>();
-	obj.environment = this->operator[]("environment").Get<::ProcessConfig::Environment>();
-	obj.dirRules = this->operator[]("dirRules").Get<::ProcessConfig::DirRules>();
-	obj.diskQuota = this->operator[]("diskQuota").Get<::ProcessConfig::DiskQuota>();
-	obj.filePermissions = this->operator[]("filePermissions").Get<::ProcessConfig::FilePermissions>();
+	obj.mode = (*this)["mode"].Get<int>();
+	obj.boxId = (*this)["boxId"].Get<int>();
+	obj.processId = (*this)["processId"].Get<int>();
+	obj.verboseLevel = (*this)["verboseLevel"].Get<int>();
+	obj.metaFile = (*this)["metaFile"].Get<string>();
+	obj.cpuTimeLimitMs = (*this)["cpuTimeLimitMs"].Get<unsigned long long>();
+	obj.wallTimeLimitMs = (*this)["wallTimeLimitMs"].Get<unsigned long long>();
+	obj.extraTimeMs = (*this)["extraTimeMs"].Get<unsigned long long>();
+	obj.checkIntervalMs = (*this)["checkIntervalMs"].Get<unsigned long long>();
+	obj.memoryLimitKB = (*this)["memoryLimitKB"].Get<int>();
+	obj.stackLimitKB = (*this)["stackLimitKB"].Get<int>();
+	obj.redirectStdin = (*this)["redirectStdin"].Get<string>();
+	obj.redirectStdout = (*this)["redirectStdout"].Get<string>();
+	obj.redirectStderr = (*this)["redirectStderr"].Get<string>();
+	obj.execDirectory = (*this)["execDirectory"].Get<string>();
+	obj.fileSizeLimitKB = (*this)["fileSizeLimitKB"].Get<int>();
+	obj.maxProcesses = (*this)["maxProcesses"].Get<int>();
+	obj.shareNetwork = (*this)["shareNetwork"].Get<int>();
+	obj.swapPipeOpenOrder = (*this)["swapPipeOpenOrder"].Get<bool>();
+	obj.legacyMetaJson = (*this)["legacyMetaJson"].Get<bool>();
+	obj.runCommand = (*this)["runCommand"].Get<string>();
+	obj.environment = (*this)["environment"].Get<::ProcessConfig::Environment>();
+	obj.dirRules = (*this)["dirRules"].Get<::ProcessConfig::DirRules>();
+	obj.diskQuota = (*this)["diskQuota"].Get<::ProcessConfig::DiskQuota>();
+	obj.filePermissions = (*this)["filePermissions"].Get<::ProcessConfig::FilePermissions>();
 	return obj;
 }
 }  //namespace AutoJson
