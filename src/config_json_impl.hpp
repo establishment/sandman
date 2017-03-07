@@ -1,5 +1,5 @@
 #include "config.hpp"
-#include "json/json"
+#include "json/json.cpp"
 
 namespace AutoJson {
 template<>

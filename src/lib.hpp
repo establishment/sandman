@@ -13,7 +13,7 @@
 
 #include "cgroups.hpp"
 #include "config.hpp"
-#include "json/json"
+#include "json/json.cpp"
 #include "rules.hpp"
 #include "runstats_json_impl.hpp"
 
@@ -515,7 +515,7 @@ class Jailer {
             if (config.legacyMetaJson) {
                 stats_str = stats.toJson();
             } else {
-                stats_str = Json(stats).Stringify(false);
+                stats_str = AutoJson::Json(stats).Stringify(false);
             }
 
             Base::xwrite(meta_fd, stats_str.c_str(), stats_str.size());
