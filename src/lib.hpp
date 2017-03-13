@@ -31,6 +31,8 @@ using Base::Die;
 
 CGroups cg;
 
+extern char** environ;
+
 class ProcessKeeper {
   public:
     ProcessKeeper(ProcessConfig config, int pid, int errorPipes[2]);

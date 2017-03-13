@@ -27,8 +27,7 @@ class Rules {
     /// set environment rules for the isolated program
     class Environment {
       public:
-        Environment(const ProcessConfig::Environment& config)
-                : allRules({}) {
+        Environment(const ProcessConfig::Environment& config) {
             this->passEnvironment = config.passEnvironment;
 
             for (int itr = 0; environ[itr]; itr += 1) {
@@ -163,14 +162,14 @@ class Rules {
             return 1;
         }
 
-        int add(std::string boxPath, unsigned int flags=0) {
+        int add(std::string boxPath, unsigned int flags = 0) {
             return add(boxPath, "/" + boxPath, flags);
         }
 
         void addDefaultRules() {
             add("box", "./box", FLAG_RW);
             add("bin");
-            add("dev", FLAG_DEV); /// TODO Is this really necesary?
+            add("dev", FLAG_DEV);  /// TODO Is this really necesary?
             add("lib");
             add("lib64", FLAG_MAYBE);
             add("proc", "proc", FLAG_FS);
@@ -178,6 +177,7 @@ class Rules {
         }
 
         void applyRules() {
+            /*
             for (DirRule rule : allDirRules) {
                 if (rule.localPath.size() == 0) {
                     Msg("Not binding anything on %s\n", rule.boxPath.c_str());
@@ -223,6 +223,7 @@ class Rules {
                     }
                 }
             }
+            */
         }
 
         std::vector<DirRule> allDirRules;
@@ -258,13 +259,14 @@ class Rules {
         }
 
       public:
-        int processUid;     /// inherited from Process
-        int blockQuota;     /// limit on disk quota blocks alloc
-        int inodeQuota;     /// number of allocated inodes
+        int processUid;  /// inherited from Process
+        int blockQuota;  /// limit on disk quota blocks alloc
+        int inodeQuota;  /// number of allocated inodes
 
         void applyQuota() {
+            /*
             if (!blockQuota)
-                return; // no disk quota set
+                return;  // no disk quota set
 
             char cwd[PATH_MAX];
             if (!getcwd(cwd, sizeof(cwd)))
@@ -289,11 +291,11 @@ class Rules {
             // Set disk quotas
             struct dqblk dq;
             bzero(&dq, sizeof(dq));
-            dq.dqb_bhardlimit = blockQuota;    /* absolute limit on disk quota blocks alloc */
-            dq.dqb_bsoftlimit = blockQuota;    /* preferred limit on disk quota blocks */
-            dq.dqb_ihardlimit = inodeQuota;    /* maximum number of allocated inodes */
-            dq.dqb_isoftlimit = inodeQuota;    /* preferred inode limit */
-            dq.dqb_valid = QIF_LIMITS;          /* limit blocks and inodes */
+            dq.dqb_bhardlimit = blockQuota;  // absolute limit on disk quota blocks alloc
+            dq.dqb_bsoftlimit = blockQuota;  // preferred limit on disk quota blocks
+            dq.dqb_ihardlimit = inodeQuota;  // maximum number of allocated inodes
+            dq.dqb_isoftlimit = inodeQuota;  // preferred inode limit
+            dq.dqb_valid = QIF_LIMITS;       // limit blocks and inodes
 
             // Apply disk quotas
             if (quotactl(QCMD(Q_SETQUOTA, USRQUOTA), dev, processUid, (caddr_t)&dq) < 0)
@@ -301,6 +303,7 @@ class Rules {
 
             Msg("Quota: Set block quota %d and inode quota %d\n", blockQuota, inodeQuota);
             free(dev);
+            */
         }
 
         DiskQuota(const ProcessConfig::DiskQuota& config, int processUid) {
@@ -310,7 +313,7 @@ class Rules {
         }
     };
 
-    /*** whitelists all files that can be accesed / used in box ***/
+    //// whitelists all files that can be accesed / used in box
     /// set specifie file permissions inside the sandbox.
     /// the default usage is to whitelist everything in the box folder
     /// and blacklist files.
@@ -368,7 +371,8 @@ class Rules {
             }
         }
 
-        void applyRules(uid_t uid) {
+        void applyRules(UNUSED uid_t uid) {
+            /*
             char* pwd = get_current_dir_name();
             if (strcmp(pwd, "/box") != 0) {
                 Die("FilePermissions::applyRules must be run in /box | %s\n", pwd);
@@ -393,6 +397,7 @@ class Rules {
 
             Msg("permissions command:\t%s\n", command.c_str());
             Base::Setfacl(command);
+            */
         }
 
         FilePermissions(const ProcessConfig::FilePermissions& config) {
