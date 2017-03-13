@@ -1,6 +1,4 @@
-
 #include <limits.h>
-#include <mntent.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/quota.h>
@@ -19,6 +17,8 @@
 
 using Base::Die;
 using Base::Msg;
+
+extern char** environ;
 
 /// Environment, DirRules, DiskQuotas, FilePermisions
 class Rules {
@@ -234,6 +234,7 @@ class Rules {
     /// limit disk space overall used in the sandbox
     class DiskQuota {
         static char* findDevice(const char* path) {
+            /*
             FILE* f = setmntent("/proc/mounts", "r");
             if (!f)
                 Die("Cannot open /proc/mounts: %m");
@@ -256,6 +257,8 @@ class Rules {
             }
             endmntent(f);
             return best_dev;
+            */
+            return NULL;
         }
 
       public:

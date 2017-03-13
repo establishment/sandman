@@ -5,7 +5,9 @@
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <sys/wait.h>
+#include <sys/mount.h>
 #include <time.h>
+#include <signal.h>
 
 #include <map>
 #include <string>
@@ -68,7 +70,6 @@ class ProcessKeeper {
         sigaction(SIGTERM, &sa, NULL);
         sigaction(SIGUSR1, &sa, NULL);
         sigaction(SIGUSR2, &sa, NULL);
-
         /// mock alert sig as well since it can be overwriteSize
         sigaction(SIGALRM, &sa, NULL);
     }
@@ -312,18 +313,18 @@ class ProcessInitialiser {
          * appearing outside of our namespace.
          * (systemd since version 188 mounts filesystems shared by default).
          */
-        if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) < 0) Die("Cannot privatize mounts: %m");
+        // if (mount(NULL, "/", 0, NULL) < 0) Die("Cannot privatize mounts: %m");
 
         /// mount root folder as ramdisk so all writes/reads from files will be fast a.f.
         /// mounts nothing("none") as a folder root which will be seen
-        if (mount("none", "root", "tmpfs", 0, "mode=755") < 0) Die("Cannot mount root ramdisk: %m");
+        // if (mount("none", "root", 0, (void*)"mode=755") < 0) Die("Cannot mount root ramdisk: %m");
 
         Rules::DirRules dirRules(config.dirRules);
         dirRules.applyRules();
 
-        if (chroot("root") < 0) Die("Chroot failed: %m");
+        // if (chroot("root") < 0) Die("Chroot failed: %m");
 
-        if (chdir("root/box") < 0) Die("Cannot change current directory: %m");
+        if (chdir("box") < 0) Die("Cannot change current directory: %m");
 
         /// TODO(@velea) why doesn't Makedir apply permissions mod?
         Base::MakeDir("/tmp", 0777);
@@ -339,7 +340,8 @@ class ProcessInitialiser {
     }
 
     void setupCredentials() {
-        if (setresgid(gid, gid, gid) < 0) {
+        /*
+        if (setgid(gid) < 0) {
             Die("setresgid: %m");
         }
 
@@ -347,11 +349,12 @@ class ProcessInitialiser {
             Die("setgroups: %m");
         }
 
-        if (setresuid(uid, uid, uid) < 0) {
+        if (setuid(uid) < 0) {
             Die("setresuid: %m");
         }
 
         setpgrp();
+        */
     }
 
     /// redirect std{in,out,err}
@@ -406,6 +409,7 @@ class ProcessInitialiser {
     }
 
     void setRlimit(int resource, rlim_t limit) {
+        /*
         struct rlimit rl;
         bzero(&rl, sizeof(rl));
         rl.rlim_cur = limit;
@@ -414,10 +418,12 @@ class ProcessInitialiser {
         if (setrlimit(resource, &rl) < 0) {
             Die("setrlimit(%s, %jd)", getRlimitName(resource).c_str(), (intmax_t)limit);
         }
+        */
     }
 
     /// set limits on process
     void setupRlimits() {
+        /*
         /// max file limit
         if (config.fileSizeLimitKB) {
             setRlimit(RLIMIT_FSIZE, (rlim_t)config.fileSizeLimitKB * 1024);
@@ -441,6 +447,7 @@ class ProcessInitialiser {
         if (config.maxProcesses) {
             setRlimit(RLIMIT_NPROC, (rlim_t)config.maxProcesses);
         }
+        */
     }
 };
 
@@ -467,7 +474,7 @@ int ProcessInitialiser::ASyncStart(void* args) {
         c++;
     }
 
-    execvpe(processArgs[0], processArgs, env);
+    execve(processArgs[0], processArgs, env);
     Die("execvpe(%s): %m", processArgs[0]);
 
     return 0;
@@ -621,11 +628,15 @@ class Jailer {
             Die("Must provide a pointer to stack if the jailer is used as a library.");
         }
 
-        int processPid =
-            clone(ProcessInitialiser::ASyncStart,  /// Function to execute as the body of the new process
-                  isolatedProcessStack,            /// stack for the new process (argv is the start of stack)
-                  SIGCHLD | CLONE_NEWIPC | (config.shareNetwork ? 0 : CLONE_NEWNET) | CLONE_NEWNS | CLONE_NEWPID,
-                  new ProcessInitialiser(config, uid, gid, errorPipes));  /// pass config for initialiser
+        int parentPid = getpid();
+        int processPid = fork();
+
+        if (processPid == 0) {
+            ProcessInitialiser::ASyncStart(new ProcessInitialiser(config, uid, gid, errorPipes));
+            // something went wrong
+            kill(parentPid, SIGCHLD);
+            exit(-1);
+        }
 
         if (processPid < 0) {
             Die("clone: %m");
