@@ -6,7 +6,7 @@ build:
 	$(MAKE) -s remove-symlinks
 
 get-submodules:
-	git submodule --quiet update --init --remote --recursive
+	git submodule --quiet update --init --recursive
 
 symlinks:
 	ln -s ../third_party/autojson/src/lib ./src/json || true
