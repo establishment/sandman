@@ -169,6 +169,10 @@ cxxopts::Options AddOptions(CommandLineConfig& config) {
         "(Usefull for interactive problems so that the processes don't enter a fifo wait loop)");
 
     options.add_options("Rules")(  //
+        "include-dir", "Mound target dir inside isolated process, read/execute.",
+        cxxopts::value<vector<ProcessConfig::DirRules::DirRule>>(config.dirRules.rules));
+
+    options.add_options("Rules")(  //
         "full-env", "Inherit full environment of the parent process");
 
     options.add_options("Rules")(  //

@@ -122,10 +122,17 @@ class Rules {
         };
 
       public:
-        DirRules(const ProcessConfig::DirRules& UNUSED config) {
+        DirRules(const ProcessConfig::DirRules& config) {
             /// add default rules before any other rule can be added.
             /// in this way the default rules can be overwitten
             addDefaultRules();
+            for (auto itr : config.rules) {
+                if (itr.localPath != "") {
+                    add(itr.boxPath, itr.localPath, itr.flags);
+                } else {
+                    add(itr.boxPath, itr.flags);
+                }
+            }
         }
 
         int add(std::string boxPath, std::string localPath, unsigned int flags) {

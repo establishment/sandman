@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <istream>
 
 using std::string;
 using std::vector;
@@ -25,7 +26,27 @@ struct ProcessConfig {
         }
     };
 
-    struct DirRules {};
+    struct DirRules {
+         struct DirRule {
+            std::string boxPath;         // A relative path to box/
+            std::string localPath;       // This can be an absolute path or a relative path starting with "./"
+            unsigned int flags;     // DIR_FLAG_xxx
+
+            DirRule(std::string boxPath="", unsigned int flags = 0)
+                : boxPath(boxPath), localPath(""), flags(flags) {
+            }
+
+            DirRule(std::string boxPath, std::string localPath, unsigned int flags = 0)
+                : boxPath(boxPath), localPath(localPath), flags(flags) {
+            }
+
+            friend std::istream& operator>>(std::istream& stream, DirRule& rhs) {
+                stream >> rhs.boxPath;
+                return stream;
+            }
+        };
+        vector<DirRule> rules;
+    };
 
     struct DiskQuota {
         int blockQuota;  /// --quota-blocks limit on disk quota blocks alloc. 0 = unlimited.
