@@ -32,11 +32,11 @@ struct ProcessConfig {
             std::string localPath;       // This can be an absolute path or a relative path starting with "./"
             unsigned int flags;     // DIR_FLAG_xxx
 
-            DirRule(std::string boxPath="", unsigned int flags = 0)
+            DirRule(std::string boxPath="", unsigned int flags = 8)
                 : boxPath(boxPath), localPath(""), flags(flags) {
             }
 
-            DirRule(std::string boxPath, std::string localPath, unsigned int flags = 0)
+            DirRule(std::string boxPath, std::string localPath, unsigned int flags = 8)
                 : boxPath(boxPath), localPath(localPath), flags(flags) {
             }
 
