@@ -26,7 +26,7 @@ FAQ
 ##### Linux with cgroup support
 ##### OSX
 - only recommended for testing/developing at the moment
-- the OSX version is available on branch `OSX`
+- the OSX version is available on branch `osx`
 
 #### How does it work?
 It creates a sandbox in /tmp
