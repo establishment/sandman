@@ -23,8 +23,10 @@ make build
 FAQ
 ---
 #### What Operating Systems are supported?
-At the moment, linux with cgroup support.
-In the future will support to run without cgroups and it'll be possible to run it on OSX.
+##### Linux with cgroup support
+##### OSX
+- only recommended for testing/developing at the moment
+- the OSX version is available on branch `OSX`
 
 #### How does it work?
 It creates a sandbox in /tmp
