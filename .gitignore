@@ -2,3 +2,4 @@ src/cpp-base
 src/json
 src/cxxopts
 testing
+isolate
