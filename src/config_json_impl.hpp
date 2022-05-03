@@ -99,7 +99,6 @@ AutoJson::Json::Json(const ::ProcessConfig& rhs) : type(JsonType::OBJECT), conte
 	(*this)["maxProcesses"] = rhs.maxProcesses;
 	(*this)["shareNetwork"] = rhs.shareNetwork;
 	(*this)["swapPipeOpenOrder"] = rhs.swapPipeOpenOrder;
-	(*this)["legacyMetaJson"] = rhs.legacyMetaJson;
 	(*this)["runCommand"] = rhs.runCommand;
 	(*this)["environment"] = rhs.environment;
 	(*this)["dirRules"] = rhs.dirRules;
@@ -129,7 +128,6 @@ AutoJson::Json::operator ::ProcessConfig() {
 	obj.maxProcesses = (*this)["maxProcesses"].Get<int>();
 	obj.shareNetwork = (*this)["shareNetwork"].Get<int>();
 	obj.swapPipeOpenOrder = (*this)["swapPipeOpenOrder"].Get<bool>();
-	obj.legacyMetaJson = (*this)["legacyMetaJson"].Get<bool>();
 	obj.runCommand = (*this)["runCommand"].Get<string>();
 	obj.environment = (*this)["environment"].Get<::ProcessConfig::Environment>();
 	obj.dirRules = (*this)["dirRules"].Get<::ProcessConfig::DirRules>();

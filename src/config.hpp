@@ -100,7 +100,6 @@ struct ProcessConfig {
     int shareNetwork;  /// --share-net      if specified, the process will share network access from parent
 
     bool swapPipeOpenOrder;  /// --interactive  open stdout first, then stdin. Avoid fifo blocking open.
-    bool legacyMetaJson;     /// --legacy-json  prints meta file in old format (version 2.0)
 
     string runCommand;  /// last argumet of command line. The command which will be run in box
 

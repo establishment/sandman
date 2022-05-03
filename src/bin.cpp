@@ -276,10 +276,6 @@ ProcessConfig ParseCommandLineArguments(int argc, char** argv) {
         p_config.shareNetwork = true;
     }
 
-    if (options.count("legacy-meta-json")) {
-        p_config.legacyMetaJson = true;
-    }
-
     if (options.count("init")) {
         p_config.mode = ProcessConfig::kInit;
     }

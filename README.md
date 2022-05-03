@@ -20,6 +20,15 @@ cd sandman
 make build 
 ```
 
+Settings up cgroups
+-------------------
+On newer versions of linux you'll need to reimplement the old cgroup pattern
+Modify /etc/default/grub :
+GRUB_CMDLINE_LINUX="systemd.unified_cgroup_hierarchy=0"
+Then run:
+update-grub
+reboot
+
 FAQ
 ---
 #### What Operating Systems are supported?

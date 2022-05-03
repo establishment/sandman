@@ -511,12 +511,7 @@ class Jailer {
 
     void PrintStats(const RunStats& stats) {
         if (meta_fd != -1) {
-            string stats_str;
-            if (config.legacyMetaJson) {
-                stats_str = stats.toJson();
-            } else {
-                stats_str = AutoJson::Json(stats).Stringify(false);
-            }
+            string stats_str = AutoJson::Json(stats).Stringify(false);
 
             Base::xwrite(meta_fd, stats_str.c_str(), stats_str.size());
         }

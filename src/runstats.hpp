@@ -103,31 +103,6 @@ class RunStats {
             return "";
         }
     }
-
-    std::string toJson() const {
-        return Base::StrCat(
-                "{\n",
-                '\t',   "\"wallTimeMs\": ",         timeStat.wallTimeMs, ",\n",
-                '\t',   "\"cpuTimeMs\": ",          timeStat.cpuTimeMs, ",\n",
-                '\t',   "\"userTimeMs\": ",         timeStat.userTimeMs, ",\n",
-                '\t',   "\"systemTimeMs\": ",       timeStat.systemTimeMs, ",\n",
-                '\t',   "\"memoryKb\": ",           memoryKB, ",\n",
-                '\t',   "\"rssPeak\": ",            rssPeak, ",\n",
-                '\t',   "\"cswVoluntary\": ",       cswVoluntary, ",\n",
-                '\t',   "\"cswForced\": ",          cswForced, ",\n",
-                '\t',   "\"softPageFaults\": ",     softPageFaults, ",\n",
-                '\t',   "\"hardPageFaults\": ",     hardPageFaults, ",\n",
-                '\t',   "\"nrSysCalls\": ",         nrSysCalls, ",\n",
-                '\t',   "\"lastSysCall\": ",        lastSysCall, ",\n",
-                '\t',   "\"terminalSignal\": ",     terminalSignal, ",\n",
-                '\t',   "\"exitCode\": ",           exitCode, ",\n",
-                '\t',   "\"processWasKilled\": ",   processWasKilled, ",\n",
-                '\t',   "\"resultCode\": ",         resultCode, ",\n",
-                '\t',   "\"version\": ",            "\"", "2.0", "\"", ",\n",
-                '\t',   "\"internalMessage\": ",    "\"", internalMessage, "\"", "\n",
-                "}\n"
-            );
-    }
 };
 
 const std::string RunStats::version = "2.1";
