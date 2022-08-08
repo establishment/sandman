@@ -302,6 +302,8 @@ ProcessConfig ParseCommandLineArguments(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
+    DieLogToFile("/eval/isolate.log");
+
     auto config = ParseCommandLineArguments(argc, argv);
 
     if (config.mode == ProcessConfig::kUnspecified) {
@@ -321,8 +323,6 @@ int main(int argc, char** argv) {
         config.mode != ProcessConfig::kCleanup) {
         Die("Internal error: mode mismatch");
     }
-
-    DieLogToFile("/eval/isolate.log");
 
     Jailer jailer(config, argv + optind);  /// share the stack size with the isolated process.);
     jailer.Start();
