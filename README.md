@@ -3,14 +3,21 @@ Linux sandbox manager - execute unsecure binaries in a controlled environment.
 
 Overview
 --------
-The project was developed as a need for [csacademy](https://csacademy.com/)'s jailing system so the user's code wouldn't be harmfull for the evaluation machines and to limit it's time/memory.
+The project was developed as a need for [csacademy](https://csacademy.com/)'s jailing system so the user's code wouldn't be harmful for the evaluation machines and to limit its time/memory.
 
+This version **only supports cgroups v2** and will not work with legacy cgroups v1 systems.
 
 Design goals
 ------------
 - Run and limit binaries with ease.
 - Good default-values
-- Accesible API
+- Accessible API
+- Modern cgroups v2 support
+
+Requirements
+------------
+- Linux kernel 5.8+ with cgroups v2 enabled (default on most modern distributions)
+- cgroups v2 mounted at `/sys/fs/cgroup/unified` (standard on systemd systems)
 
 Installation
 ------------
@@ -20,14 +27,15 @@ cd sandman
 make build 
 ```
 
-Settings up cgroups
--------------------
-On newer versions of linux you'll need to reimplement the old cgroup pattern
-Modify /etc/default/grub :
-GRUB_CMDLINE_LINUX="systemd.unified_cgroup_hierarchy=0"
-Then run:
-update-grub
-reboot
+Cgroups v2 Setup
+----------------
+Most modern Linux distributions (Ubuntu 21.10+, Debian 11+, RHEL 9+) use cgroups v2 by default.
+
+To verify you have cgroups v2:
+```sh
+stat -fc %T /sys/fs/cgroup/unified
+```
+This should return `cgroup2fs`. If it returns `tmpfs`, you're still using cgroups v1.
 
 FAQ
 ---

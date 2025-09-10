@@ -15,7 +15,7 @@
 /// CGroups v2 API - simplified for unified hierarchy
 class CGroups {
   public:
-    static std::string cgRootPath;   /// "/sys/fs/cgroup"
+    static inline string cgRootPath = "/sys/fs/cgroup/unified";
 
     CGroups() {
         this->cgName = "";
@@ -23,7 +23,7 @@ class CGroups {
         this->useCGTiming = 1;
     }
 
-    std::string cgName;         /// name of the control group
+    string cgName;         /// name of the control group
     int cgMemoryLimitKB;        /// memory limit for that cg
     int useCGTiming;            /// query process time from control group - default = true
 
@@ -32,15 +32,15 @@ class CGroups {
 
   protected:
     /// Build path to cgroup v2 file: /sys/fs/cgroup/group_name/parameter
-    std::string getPath(const std::string& parameter) {
+    string getPath(const string& parameter) {
         return Base::StrCat(cgRootPath, '/', cgName, '/', parameter);
     }
 
-    int readStat(const std::string& parameter, bool maybe=false) {
+    int readStat(const string& parameter, bool maybe=false) {
         int success = 0;
         int readSize = 0;
 
-        std::string path = getPath(parameter);
+        string path = getPath(parameter);
 
         int fd = open(path.c_str(), O_RDONLY);
         if (fd < 0) {
@@ -85,13 +85,13 @@ class CGroups {
         return success;
     }
 
-    int writeStat(const std::string& parameter, const std::string& value, bool maybe=false) {
+    int writeStat(const string& parameter, const string& value, bool maybe=false) {
         int success = 0;
         ssize_t writeSize = 0;
 
         Base::Msg(2, "CG: Write %s = %s\n", parameter.c_str(), value.c_str());
 
-        std::string path = getPath(parameter);
+        string path = getPath(parameter);
 
         /// check file descriptor
         int fd = open(path.c_str(), O_WRONLY | O_TRUNC);
@@ -160,7 +160,7 @@ class CGroups {
         
         // Create the cgroup directory
         struct stat st;
-        std::string path = Base::StrCat(cgRootPath, '/', cgName);
+        string path = Base::StrCat(cgRootPath, '/', cgName);
         if (stat(path.c_str(), &st) >= 0 || errno != ENOENT) {
             Base::Msg("Control group %s already exists, trying to empty it.\n", path.c_str());
             if (rmdir(path.c_str()) < 0) {
@@ -173,7 +173,7 @@ class CGroups {
         }
         
         // Enable controllers in v2 - try to enable at root level first
-        std::string controllers_path = Base::StrCat(cgRootPath, "/cgroup.subtree_control");
+        string controllers_path = Base::StrCat(cgRootPath, "/cgroup.subtree_control");
         int fd = open(controllers_path.c_str(), O_WRONLY);
         if (fd < 0) {
             Base::Die("Cannot open cgroup.subtree_control: %m");
@@ -223,7 +223,7 @@ class CGroups {
             }
         }
 
-        std::string path = Base::StrCat(cgRootPath, '/', cgName);
+        string path = Base::StrCat(cgRootPath, '/', cgName);
         if (rmdir(path.c_str()) < 0) {
             Base::Die("Cannot remove control group %s: %m", path.c_str());
         }
@@ -288,5 +288,3 @@ class CGroups {
         return mem >> 10; // Convert bytes to KB
     }
 };
-
-std::string CGroups::cgRootPath = "/sys/fs/cgroup/unified";
