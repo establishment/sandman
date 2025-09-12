@@ -17,7 +17,7 @@ Design goals
 Requirements
 ------------
 - Linux kernel 5.8+ with cgroups v2 enabled (default on most modern distributions)
-- cgroups v2 mounted at `/sys/fs/cgroup/unified` (standard on systemd systems)
+- cgroups v2 mounted at `/sys/fs/cgroup` (standard on systemd systems)
 
 Installation
 ------------
@@ -33,7 +33,7 @@ Most modern Linux distributions (Ubuntu 21.10+, Debian 11+, RHEL 9+) use cgroups
 
 To verify you have cgroups v2:
 ```sh
-stat -fc %T /sys/fs/cgroup/unified
+stat -fc %T /sys/fs/cgroup
 ```
 This should return `cgroup2fs`. If it returns `tmpfs`, you're still using cgroups v1.
 

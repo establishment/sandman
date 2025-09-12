@@ -15,7 +15,7 @@
 /// CGroups v2 API - simplified for unified hierarchy
 class CGroups {
   public:
-    static inline string cgRootPath = "/sys/fs/cgroup/unified";
+    static inline string cgRootPath = "/sys/fs/cgroup";
 
     CGroups() {
         this->cgName = "";
