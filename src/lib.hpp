@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
+#include <poll.h>
 #include <string.h>
 #include <sys/resource.h>
 #include <sys/time.h>
@@ -39,7 +40,7 @@ class ProcessKeeper {
     int processPid;        /// pid of the isolate process (initially cloned, than execved)
     int errorPipes[2];     /// write erros to errorPipes[0]
 
-    PreciseTimer wallClock;  /// mesures the wall time from the start of the sandbox process
+    PreciseTimer wallClock;  /// mesures the wall time from the exec of the sandboxed program
 
     RunStats processStats;  /// keeps process data in case it was killed by TLE
 
@@ -149,6 +150,20 @@ class ProcessKeeper {
         return RunStats::OK;
     }
 
+    /// Waits for the program's exec, when the close-on-exec error pipe hangs up (or carries the child's error)
+    void waitForExec() {
+        struct pollfd errorPipe = {errorPipes[0], POLLIN, 0};
+        while (!processStats.processWasKilled) {
+            int ready = poll(&errorPipe, 1, -1);
+            if (ready > 0) {
+                return;
+            }
+            if (ready < 0 && errno != EINTR) {
+                Die("poll: %m");
+            }
+        }
+    }
+
   public:
     RunStats startKeeper() {
         /// start clock even thou it is already started by the constructor
@@ -164,6 +179,12 @@ class ProcessKeeper {
         if (config.checkIntervalMs) {
             startStatusCheck(config.checkIntervalMs);
         }
+
+        waitForExec();
+        if (processStats.processWasKilled) {
+            return processStats;
+        }
+        wallClock.start();
 
         while (1) {
             struct rusage processUsage;
@@ -263,18 +284,20 @@ class ProcessInitialiser {
     static int ASyncStart(void*);
 
   public:
-    ProcessInitialiser(ProcessConfig config, int uid, int gid, int errorPipes[2]) {
+    ProcessInitialiser(ProcessConfig config, int uid, int gid, int errorPipes[2], int cgroupProcsFd) {
         this->config = config;
         this->uid = uid;
         this->gid = gid;
         this->errorPipes[0] = errorPipes[0];
         this->errorPipes[1] = errorPipes[1];
+        this->cgroupProcsFd = cgroupProcsFd;
     }
 
     ProcessConfig config;
     int uid;
     int gid;
     int errorPipes[2];
+    int cgroupProcsFd;
 
     /// sets up everything so that the process will be run in a controlled
     /// sandbox as specified by the config given
@@ -282,10 +305,11 @@ class ProcessInitialiser {
         Base::die_fd = errorPipes[1];
         close(errorPipes[0]);
 
-        cg.enter();
         setupRoot();
         setupPipes();
         setupFilePermissions();
+        /// Entered only now, so the jail's own setup isn't billed to the program
+        cg.enter(cgroupProcsFd);
         setupRlimits();
         setupCredentials();
 
@@ -323,9 +347,11 @@ class ProcessInitialiser {
 
         if (chdir("root/box") < 0) Die("Cannot change current directory: %m");
 
-        /// TODO(@velea) why doesn't Makedir apply permissions mod?
         Base::MakeDir("/tmp", 0777);
-        Base::RChmod(" 777 /tmp ");
+        /// mkdir's mode is masked by the umask
+        if (chmod("/tmp", 0777) < 0) {
+            Die("chmod /tmp: %m");
+        }
     }
 
     /// apply permissions for the process uid
@@ -596,6 +622,8 @@ class Jailer {
         }
 
         cg.prepare();  /// creates cgroup if it's not created
+        cg.applyLimits();
+        int cgroupProcsFd = cg.openProcs();
 
         /// This code will live here. Life is hard.
         /// setup pipes
@@ -614,15 +642,17 @@ class Jailer {
             Die("Must provide a pointer to stack if the jailer is used as a library.");
         }
 
+        /// TODO: the program is its PID namespace's init, which drops signals it raises itself, so abort() ends as SIGSEGV
         int processPid =
             clone(ProcessInitialiser::ASyncStart,  /// Function to execute as the body of the new process
                   isolatedProcessStack,            /// stack for the new process (argv is the start of stack)
                   SIGCHLD | CLONE_NEWIPC | (config.shareNetwork ? 0 : CLONE_NEWNET) | CLONE_NEWNS | CLONE_NEWPID,
-                  new ProcessInitialiser(config, uid, gid, errorPipes));  /// pass config for initialiser
+                  new ProcessInitialiser(config, uid, gid, errorPipes, cgroupProcsFd));  /// pass config for initialiser
 
         if (processPid < 0) {
             Die("clone: %m");
         }
+        close(cgroupProcsFd);
 
         if (!processPid) {
             Die("clone returned 0");

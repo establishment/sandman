@@ -1,4 +1,6 @@
 
+#include <errno.h>
+#include <glob.h>
 #include <limits.h>
 #include <mntent.h>
 #include <sys/mount.h>
@@ -358,6 +360,44 @@ class Rules {
             return result;
         }
 
+        /// A path expanded as the shell would, minus symlinks: root must not follow one the program left in the box
+        static std::vector<std::string> expandPath(const std::string& path) {
+            glob_t matches;
+            if (glob(path.c_str(), GLOB_NOCHECK, nullptr, &matches) != 0) {
+                Die("glob %s: %m", path.c_str());
+            }
+
+            std::vector<std::string> paths;
+            for (size_t i = 0; i < matches.gl_pathc; i += 1) {
+                if (!traversesSymlink(matches.gl_pathv[i])) {
+                    paths.push_back(matches.gl_pathv[i]);
+                }
+            }
+            globfree(&matches);
+            return paths;
+        }
+
+        static bool traversesSymlink(const std::string& path) {
+            for (size_t end = path.find('/', 1);; end = path.find('/', end + 1)) {
+                struct stat st;
+                if (lstat(path.substr(0, end).c_str(), &st) == 0 && S_ISLNK(st.st_mode)) {
+                    return true;
+                }
+                if (end == std::string::npos) {
+                    return false;
+                }
+            }
+        }
+
+        /// A file name is the program's to choose, so it must reach setfacl as one argument that isn't an option
+        static std::string shellArgument(const std::string& path) {
+            std::string quoted = path[0] == '-' ? "'./" : "'";
+            for (char c : path) {
+                quoted += c == '\'' ? std::string("'\\''") : std::string(1, c);
+            }
+            return quoted + "'";
+        }
+
       public:
         void addRule(std::string path, std::string mode) {
             Permission p;
@@ -386,15 +426,31 @@ class Rules {
             }
 
             /// delete all privileges for other
-            Base::Chmod("750 .");
-            Base::Chmod("750 *");
+            if (chmod(".", 0750) < 0) {
+                Die("chmod .: %m");
+            }
+            for (const std::string& path : expandPath("*")) {
+                /// The other jail of an interactive run may delete a file meanwhile
+                if (chmod(path.c_str(), 0750) < 0 && errno != ENOENT) {
+                    Die("chmod %s: %m", path.c_str());
+                }
+            }
 
             std::string command = "";
             for (const Permission& rule : allPermissions) {
+                std::string files = "";
+                for (const std::string& path : expandPath(rule.path)) {
+                    files += " " + shellArgument(path);
+                }
+                /// An -m with no files after it would merge into the next rule's
+                if (files.empty()) {
+                    continue;
+                }
+
                 if (rule.mode == "") {
-                    command += Base::StrCat("-x u:", uid, " ", rule.path, " ");
+                    command += Base::StrCat("-x u:", uid, files, " ");
                 } else {
-                    command += Base::StrCat("-m u:", uid, ":", rule.mode, " ", rule.path, " ");
+                    command += Base::StrCat("-m u:", uid, ":", rule.mode, files, " ");
                 }
             }
 

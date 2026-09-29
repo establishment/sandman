@@ -201,17 +201,31 @@ class CGroups {
         }
     }
 
-    void enter() {
-        Base::Msg("Entering control group %s\n", cgName.c_str());
-
-        // Add current process to cgroup
-        writeStat("cgroup.procs", Base::StrCat(getpid()));
-
+    void applyLimits() {
         if (cgMemoryLimitKB) {
-            // Set memory limit
             writeStat("memory.max", Base::StrCat(cgMemoryLimitKB << 10));
             writeStat("memory.swap.max", Base::StrCat(cgMemoryLimitKB << 10), true);
         }
+    }
+
+    /// Opened before the jail hides /sys, so a process can enter from inside it
+    int openProcs() {
+        string path = getPath("cgroup.procs");
+        int fd = open(path.c_str(), O_WRONLY | O_CLOEXEC);
+        if (fd < 0) {
+            Base::Die("Cannot open %s: %m", path.c_str());
+        }
+        return fd;
+    }
+
+    void enter(int procsFd) {
+        Base::Msg("Entering control group %s\n", cgName.c_str());
+
+        string pid = Base::StrCat(getpid());
+        if (write(procsFd, pid.c_str(), pid.size()) != (ssize_t)pid.size()) {
+            Base::Die("Cannot enter control group %s: %m", cgName.c_str());
+        }
+        close(procsFd);
     }
 
     /// removes cgroup
