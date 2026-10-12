@@ -40,13 +40,6 @@ template<>
 AutoJson::Json::Json(const ::RunStats& rhs) : type(JsonType::OBJECT), content(new std::map<std::string, Json>()) {
 	(*this)["timeStat"] = rhs.timeStat;
 	(*this)["memoryKB"] = rhs.memoryKB;
-	(*this)["rssPeak"] = rhs.rssPeak;
-	(*this)["cswVoluntary"] = rhs.cswVoluntary;
-	(*this)["cswForced"] = rhs.cswForced;
-	(*this)["softPageFaults"] = rhs.softPageFaults;
-	(*this)["hardPageFaults"] = rhs.hardPageFaults;
-	(*this)["nrSysCalls"] = rhs.nrSysCalls;
-	(*this)["lastSysCall"] = rhs.lastSysCall;
 	(*this)["terminalSignal"] = rhs.terminalSignal;
 	(*this)["exitCode"] = rhs.exitCode;
 	(*this)["processWasKilled"] = rhs.processWasKilled;
@@ -60,13 +53,6 @@ AutoJson::Json::operator ::RunStats() {
 	::RunStats obj;
 	obj.timeStat = (*this)["timeStat"].Get<::RunStats::TimeStat>();
 	obj.memoryKB = (*this)["memoryKB"].Get<size_t>();
-	obj.rssPeak = (*this)["rssPeak"].Get<long int>();
-	obj.cswVoluntary = (*this)["cswVoluntary"].Get<long int>();
-	obj.cswForced = (*this)["cswForced"].Get<long int>();
-	obj.softPageFaults = (*this)["softPageFaults"].Get<size_t>();
-	obj.hardPageFaults = (*this)["hardPageFaults"].Get<size_t>();
-	obj.nrSysCalls = (*this)["nrSysCalls"].Get<int>();
-	obj.lastSysCall = (*this)["lastSysCall"].Get<int>();
 	obj.terminalSignal = (*this)["terminalSignal"].Get<int>();
 	obj.exitCode = (*this)["exitCode"].Get<int>();
 	obj.processWasKilled = (*this)["processWasKilled"].Get<bool>();
@@ -75,5 +61,3 @@ AutoJson::Json::operator ::RunStats() {
 	return obj;
 }
 }  //namespace AutoJson
-
-

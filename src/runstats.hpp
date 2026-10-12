@@ -1,129 +1,44 @@
 #pragma once
 
-#include <sys/resource.h>   /// rusage
-#include <stddef.h>         /// size_t
+#include <stddef.h>
 #include <string>
 
-
-#include "cpp-base/string_utils.hpp"
-
-/// Statistics about the task
+/// What a run ended as, written to the meta file
 class RunStats {
   public:
-    /// List of result codes we can expect
-    /// Anything except OK is a fail
+    /// Anything except OK is a fail; the evaluator maps the numbers, so they never move
     enum ResultCode {
         UNDEFINED = 0,
-        OK,                             /// Okay
-        RESTRICTED_FUNCTION,            /// Restricted system call
-        TIME_LIMIT_EXCEEDED,            /// Time limit exceeded
-        WALL_TIME_LIMIT_EXCEEDED,       /// Wall time limit exceeded
-        MEMORY_LIMIT_EXCEEDED,          /// Memory limit Exceed
-        OUTPUT_LIMIT_EXCEEDED,          /// Output limit Exceed
-        NON_ZERO_EXIT_STATUS,           /// Process did not return 0
-        RUNTIME_ERROR,                  /// Run time error (SIGSEGV, ...)
-        ABNORMAL_TERMINATION,           /// Abnormal Termination WAT?
-        INTERNAL_ERROR,                 /// Internal Jail Error
+        OK,
+        RESTRICTED_FUNCTION,
+        TIME_LIMIT_EXCEEDED,
+        WALL_TIME_LIMIT_EXCEEDED,
+        MEMORY_LIMIT_EXCEEDED,
+        OUTPUT_LIMIT_EXCEEDED,
+        NON_ZERO_EXIT_STATUS,
+        RUNTIME_ERROR,
+        ABNORMAL_TERMINATION,
+        INTERNAL_ERROR,
     };
 
     /// Nanoseconds, at the resolution the platform has: a Linux cgroup accounts in microseconds
     struct TimeStat {
-        unsigned long long wallTimeNs;    /// wall clock time from the exec
-        unsigned long long cpuTimeNs;     /// CPU time, user and kernel
-        unsigned long long userTimeNs;    /// CPU time in user mode
-        unsigned long long systemTimeNs;  /// CPU time in kernel mode
+        unsigned long long wallTimeNs = 0;    /// wall clock time from the exec
+        unsigned long long cpuTimeNs = 0;     /// CPU time, user and kernel
+        unsigned long long userTimeNs = 0;    /// CPU time in user mode
+        unsigned long long systemTimeNs = 0;  /// CPU time in kernel mode
     };
 
-    RunStats() {
-        this->timeStat = {0, 0, 0, 0};
-
-        this->memoryKB = 0;
-        
-        this->rssPeak = 0;
-        this->cswVoluntary = 0;
-        this->cswForced = 0;
-        this->softPageFaults = 0;
-        this->hardPageFaults = 0;
-
-        this->nrSysCalls = 0;
-        this->lastSysCall = 0;
-        this->terminalSignal = 0;
-
-        this->exitCode = 0;
-        this->processWasKilled = false;
-        this->resultCode = INTERNAL_ERROR;
-
-        this->internalMessage = "";
-    }
-
     TimeStat timeStat;
+    size_t memoryKB = 0;  /// peak memory of the control group
 
-    size_t memoryKB;            /// memory as queried from control group
-
-    long int rssPeak;           /// resident set peak size (bytes) -- amount of memory in RAM, not swap
-    long int cswVoluntary;      /// number of voluntary context switches
-    long int cswForced;         /// number of forced context switches
-    size_t softPageFaults;      /// minor page faults (number of pages)
-    size_t hardPageFaults;      /// major page faults (number of pages)
-
-    int nrSysCalls;             /// nr of system calls we intercepted
-    int lastSysCall;            /// last syscall code called
-    int terminalSignal;         /// signal that killed the process
-
-    int exitCode;               /// exit code (that the program terminated with naturally)
-    bool processWasKilled;      /// true if it was killed by keeper (time limits)
-    ResultCode resultCode;      /// if not ResultCode::OK, it's the reason the task did not pass
-
-    static const std::string version;
+    int terminalSignal = 0;  /// signal that killed the program
+    int exitCode = 0;        /// exit code the program ended with on its own
+    bool processWasKilled = false;  /// killed by the keeper for a limit
+    ResultCode resultCode = INTERNAL_ERROR;
     std::string internalMessage;
 
-    template<typename T>
-    void update(const T&);
-
-  protected:
-    template<typename T>
-    void updateValue(T& lhs, const T& rhs) {
-        if (rhs) {
-            lhs = rhs;
-        }
-    }
-
-  public:
-    std::string getStringStatus() const {
-        if (resultCode == OK) {
-            return "";
-        } else if (resultCode == NON_ZERO_EXIT_STATUS) {
-            return "status:RE\n";
-        } else if (resultCode == RUNTIME_ERROR) {
-            return "status:SG\n";
-        } else if (resultCode == WALL_TIME_LIMIT_EXCEEDED || resultCode == TIME_LIMIT_EXCEEDED) {
-            return "status:TO\n";
-        } else if (resultCode == UNDEFINED || resultCode == INTERNAL_ERROR) {
-            return "status:XX\n";
-        } else {
-            return "";
-        }
-    }
+    static const std::string version;
 };
 
-const std::string RunStats::version = "2.3";
-
-template<>
-void RunStats::update(const rusage& usage) {
-    updateValue(this->rssPeak, usage.ru_maxrss);
-    updateValue(this->cswVoluntary, usage.ru_nvcsw);
-    updateValue(this->cswForced, usage.ru_nivcsw);
-}
-
-template<>
-void RunStats::update(const RunStats::ResultCode& resultCode) {
-    updateValue(this->resultCode, resultCode);
-}
-
-template<>
-void RunStats::update(const RunStats::TimeStat& timeStat) {
-    updateValue(this->timeStat.wallTimeNs, timeStat.wallTimeNs);
-    updateValue(this->timeStat.cpuTimeNs, timeStat.cpuTimeNs);
-    updateValue(this->timeStat.userTimeNs, timeStat.userTimeNs);
-    updateValue(this->timeStat.systemTimeNs, timeStat.systemTimeNs);
-}
+const std::string RunStats::version = "2.4";

@@ -49,8 +49,10 @@ FAQ
 It creates a sandbox in /tmp
 Forks a child which will execute that command later.
 Puts the child into a cgroup, limits it's permissions (like limiting the maximum number of processes which can be spawned from it, limiting max-file size, stack size)
-Mounts selected linux core folders like /bin into it read-only.
+Mounts selected linux core folders like /bin into it read-only, and gives it a /dev and a /tmp of its own.
+Gives the command's uid an ACL entry on the box files its permission rules name, written straight into the files' extended attributes, and shuts everyone else out of the box.
 Forbids the command to create symlinks (Landlock), and never follows one itself when it opens the command's files as root.
+Refuses the system calls a solution has no use for (user namespaces, mounts, io_uring, bpf, keys, vsock) with seccomp.
 Enters the cgroup and drops root only as the last step before the exec, so none of the setup is billed to the command.
 Aplies disk-quotas and sandbox permissions.
 Changes the root of the binary into that sandbox folder.
@@ -70,6 +72,8 @@ sudo ./isolate --box-id=0 --init
 sudo cp my_binary /tmp/box/0/box
 sudo ./isolate --box-id=0 --run --meta -- ./my_binary
 ```
+
+A run may have at most 16 processes and threads unless `--processes` says otherwise.
 
 To get the run stats, with its times as integer nanoseconds at the resolution the platform has, run
 ```sh

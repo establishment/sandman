@@ -1,363 +1,204 @@
-
 #include <errno.h>
 #include <fcntl.h>
 #include <glob.h>
-#include <limits.h>
-#include <mntent.h>
+#include <linux/posix_acl.h>
+#include <linux/posix_acl_xattr.h>
 #include <sys/file.h>
 #include <sys/mount.h>
-#include <sys/stat.h>
 #include <sys/quota.h>
-#include <sys/wait.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <map>
 #include <string>
 #include <vector>
 
-#include "cpp-base/string_utils.hpp"
 #include "cpp-base/os.hpp"
+#include "cpp-base/string_utils.hpp"
 
 #include "config.hpp"
 #include "die.hpp"
 
-
 using Base::Die;
 using Base::Msg;
 
-/// Environment, DirRules, DiskQuotas, FilePermisions
+/// Environment, DirRules, DiskQuota, FilePermissions
 class Rules {
   public:
-    /*** Environment rules ***/
     /// The program's environment is only what the rules name: nothing of isolate's own leaks into the box
     class Environment {
-      public:
-        Environment(const ProcessConfig::Environment& config)
-                : allRules({}) {
-            addDefaultRules();
-
-            for (const auto& rule : config.rules) {
-                addRule(rule);
-            }
-        }
+        std::map<std::string, std::string> variables;
 
         /// A rule without a value inherits the variable from isolate's own environment, if set there
-        std::pair<std::string, std::string> getRule(const std::string& commandLineRule) {
-            std::size_t equalPosition = commandLineRule.find("=");
-
-            if (equalPosition == std::string::npos) {
-                const char* inherited = getenv(commandLineRule.c_str());
-                return {commandLineRule, inherited ? inherited : ""};
+        void add(const std::string& rule) {
+            size_t equal = rule.find('=');
+            std::string name = rule.substr(0, equal);
+            if (name.empty()) {
+                Die("--env rule without a variable name: %s", rule.c_str());
+            }
+            if (equal == std::string::npos) {
+                const char* inherited = getenv(name.c_str());
+                variables[name] = inherited ? inherited : "";
             } else {
-                return {commandLineRule.substr(0, equalPosition),
-                                 commandLineRule.substr(equalPosition + 1)};
+                variables[name] = rule.substr(equal + 1);
             }
-        };
-
-        std::map<std::string, std::string> allRules;
-
-        void addDefaultRules() {
-            addRule("LIBC_FATAL_STDERR_=1");    /// send fatal errors to stderr
         }
 
-        // return true if the rule is correct and it was added/a old rule was updated
-        int addRule(const std::string& commandLineRule) {
-            std::pair<std::string, std::string> rule = getRule(commandLineRule);
-            if (rule.first == "") {
-                return 0;
+      public:
+        Environment(const vector<string>& rules) {
+            add("LIBC_FATAL_STDERR_=1");  /// fatal errors go to stderr, where the program's output expects them
+            for (const std::string& rule : rules) {
+                add(rule);
             }
-
-            allRules[rule.first] = rule.second;
-            return 1;
         }
 
-        // returns the environment variables in char** format
+        /// A variable with an empty value is left out altogether
         char** getEnvironment() {
-            int numRules = 0;
-            for (auto rule : allRules) {
-                // don't count empty rules for the final number of rules
-                numRules += !rule.second.empty();
-            }
-
-            char** env = (char**) malloc((numRules + 1) * sizeof(char*));
-            int currentRule = 0;
-
-            env[numRules] = NULL;
-            for (auto rule : allRules) {
-                if (rule.second.empty()) {
-                    // no empty rules
-                    continue;
+            std::vector<std::string> entries;
+            for (const auto& [name, value] : variables) {
+                if (!value.empty()) {
+                    entries.push_back(name + "=" + value);
                 }
-
-                env[currentRule++] = strdup(Base::StrCat(rule.first, "=", rule.second).c_str());
             }
-
-            return env;
+            return Base::StringToCharSS(entries);
         }
     };
 
-    /*** Directory rules ***/
-    /// mount system tools (such as bin, dev, lib, proc) into the sandbox
+    /// What of the host the jail sees: the box read-write, the system's binaries and libraries read-only
     class DirRules {
-      public:
-        enum DirRuleFlag {
-            FLAG_RW = (1 << 0),         // Allow read-write access.
-            FLAG_NOEXEC = (1 << 1),     // Disallow execution of binaries.
-            FLAG_FS = (1 << 2),         // For 'proc' or 'sysfs'
-                                        // Instead of binding a directory, mount a device-less filesystem called 'in'.
-            FLAG_MAYBE = (1 << 3),      // Silently ignore the rule if the directory to be bound does not exist.
-            FLAG_DEV = (1 << 4),        // Allow access to character and block devices.
+        enum Flags {
+            FLAG_RW = 1 << 0,     /// read-write, otherwise read-only
+            FLAG_FS = 1 << 1,     /// a filesystem of that type rather than a bind, as for proc
+            FLAG_MAYBE = 1 << 2,  /// skipped when the host has no such directory
         };
 
-      private:
         struct DirRule {
-            std::string boxPath;         // A relative path to box/
-            std::string localPath;       // This can be an absolute path or a relative path starting with "./"
-            unsigned int flags;     // DIR_FLAG_xxx
+            std::string boxPath;    /// relative to the jail's root
+            std::string localPath;  /// absolute on the host, or relative to the box's directory
+            unsigned flags;
+        };
+
+        std::vector<DirRule> rules = {
+            {"box", "./box", FLAG_RW}, {"bin", "/bin", 0},        {"lib", "/lib", 0},
+            {"lib64", "/lib64", FLAG_MAYBE}, {"proc", "proc", FLAG_FS}, {"usr", "/usr", 0},
         };
 
       public:
-        DirRules(const ProcessConfig::DirRules& config) {
-            /// add default rules before any other rule can be added.
-            /// in this way the default rules can be overwitten
-            addDefaultRules();
-            for (auto itr : config.rules) {
-                if (itr.localPath != "") {
-                    add(itr.boxPath, itr.localPath, itr.flags);
-                } else {
-                    add(itr.boxPath, itr.flags);
+        DirRules(const vector<string>& includeDirs) {
+            for (std::string boxPath : includeDirs) {
+                while (!boxPath.empty() && boxPath[0] == '/') {
+                    boxPath = boxPath.substr(1);
                 }
-            }
-        }
-
-        int add(std::string boxPath, std::string localPath, unsigned int flags) {
-            // Make sure that "boxPath" is relative
-            while (boxPath.size() && boxPath[0] == '/') {
-                boxPath = boxPath.substr(1);
-            }
-
-            // Check boxPath
-            if (boxPath.size() == 0 || localPath.size() == 0) {
-                return 0;
-            }
-
-            // Check "localPath"
-            if (flags & FLAG_FS) {
-                if (localPath[0] == '/') {
-                    return 0;
+                if (boxPath.empty()) {
+                    Die("--include-dir needs a path");
                 }
-            } else if (localPath[0] != '/' && localPath.substr(0, 2) != "./") {
-                return 0;
+                rules.push_back({boxPath, "/" + boxPath, FLAG_MAYBE});
             }
-
-            // Override an existing rule
-            for (DirRule& rule : allDirRules) {
-                if (rule.boxPath == boxPath) {
-                    rule.localPath = localPath;
-                    rule.flags = flags;
-                    return 1;
-                }
-            }
-
-            // Add a new rule
-            allDirRules.push_back({boxPath, localPath, flags});
-
-            return 1;
-        }
-
-        int add(std::string boxPath, unsigned int flags=0) {
-            return add(boxPath, "/" + boxPath, flags);
-        }
-
-        void addDefaultRules() {
-            add("box", "./box", FLAG_RW);
-            add("bin");
-            add("dev", FLAG_DEV); /// TODO Is this really necesary?
-            add("lib");
-            add("lib64", FLAG_MAYBE);
-            add("proc", "proc", FLAG_FS);
-            add("usr");
         }
 
         void applyRules() {
-            for (DirRule rule : allDirRules) {
-                if (rule.localPath.size() == 0) {
-                    Msg("Not binding anything on %s\n", rule.boxPath.c_str());
-                    continue;
-                }
-
-                if ((rule.flags & FLAG_MAYBE) && !Base::DirExists(rule.localPath.c_str())) {
+            for (const DirRule& rule : rules) {
+                if ((rule.flags & FLAG_MAYBE) && !Base::DirExists(rule.localPath)) {
                     Msg("Not binding %s on %s (does not exist)\n", rule.localPath.c_str(), rule.boxPath.c_str());
                     continue;
                 }
 
-                char rootInBox[1024];
-                snprintf(rootInBox, sizeof(rootInBox), "root/%s", rule.boxPath.c_str());
+                std::string rootInBox = "root/" + rule.boxPath;
                 Base::MakeDir(rootInBox);
 
-                // convert rules from DIR_FLAGS_XXX to mount rule
-                unsigned long mount_flags = 0;
-
+                /// Nothing a program finds in the jail is a device
+                unsigned long mountFlags = MS_NODEV;
                 if (!(rule.flags & FLAG_RW)) {
-                    mount_flags |= MS_RDONLY;
-                }
-
-                if (rule.flags & FLAG_NOEXEC) {
-                    mount_flags |= MS_NOEXEC;
-                }
-
-                if (!(rule.flags & FLAG_DEV)) {
-                    mount_flags |= MS_NODEV;
+                    mountFlags |= MS_RDONLY;
                 }
 
                 if (rule.flags & FLAG_FS) {
-                    Msg("Mounting %s on %s (flags %lx)\n", rule.localPath.c_str(), rule.boxPath.c_str(), mount_flags);
-                    if (mount("none", rootInBox, rule.localPath.c_str(), mount_flags, "") < 0) {
+                    Msg("Mounting %s on %s (flags %lx)\n", rule.localPath.c_str(), rule.boxPath.c_str(), mountFlags);
+                    if (mount("none", rootInBox.c_str(), rule.localPath.c_str(), mountFlags, "") < 0) {
                         Die("%s: %m", Base::StrCat("Cannot mount ", rule.localPath, " on ", rule.boxPath).c_str());
                     }
                 } else {
-                    mount_flags |= MS_BIND | MS_NOSUID;
-                    Msg("Binding %s on %s (flags %lx)\n", rule.localPath.c_str(), rule.boxPath.c_str(), mount_flags);
-                    // Most mount flags need remount to work
-                    if (mount(rule.localPath.c_str(), rootInBox, "none", mount_flags, "") < 0 ||
-                        mount(rule.localPath.c_str(), rootInBox, "none", MS_REMOUNT | mount_flags, "") < 0) {
+                    mountFlags |= MS_BIND | MS_NOSUID;
+                    Msg("Binding %s on %s (flags %lx)\n", rule.localPath.c_str(), rule.boxPath.c_str(), mountFlags);
+                    /// A bind takes its flags only on a remount
+                    if (mount(rule.localPath.c_str(), rootInBox.c_str(), "none", mountFlags, "") < 0 ||
+                        mount(rule.localPath.c_str(), rootInBox.c_str(), "none", MS_REMOUNT | mountFlags, "") < 0) {
                         Die("%s: %m", Base::StrCat("Cannot mount ", rule.localPath, " on ", rule.boxPath).c_str());
                     }
                 }
             }
         }
-
-        std::vector<DirRule> allDirRules;
     };
 
-    /*** Disk quotas ***/
-    /// not fully implemented.
-    /// limit disk space overall used in the sandbox
+    /// What the box's users may own on the box's filesystem, which has to be mounted with usrquota
     class DiskQuota {
-        static char* findDevice(const char* path) {
-            FILE* f = setmntent("/proc/mounts", "r");
-            if (!f)
-                Die("Cannot open /proc/mounts: %m");
-
-            struct mntent* me;
-            int best_len = 0;
-            char* best_dev = NULL;
-            while ((me = getmntent(f))) {
-                if (!Base::PathBeginsWith(me->mnt_fsname, "/dev"))
-                    continue;
-
-                if (Base::PathBeginsWith(path, me->mnt_dir)) {
-                    int len = strlen(me->mnt_dir);
-                    if (len > best_len) {
-                        best_len = len;
-                        free(best_dev);
-                        best_dev = strdup(me->mnt_fsname);
-                    }
+      public:
+        static void apply(int blocksKB, int inodes, int firstUid, int uidCount) {
+            if (!blocksKB && !inodes) {
+                return;
+            }
+            int box = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+            if (box < 0) {
+                Die("open box dir: %m");
+            }
+            for (int uid = firstUid; uid < firstUid + uidCount; uid += 1) {
+                struct dqblk quota;
+                memset(&quota, 0, sizeof(quota));
+                quota.dqb_bhardlimit = blocksKB;  /// in KB
+                quota.dqb_bsoftlimit = blocksKB;
+                quota.dqb_ihardlimit = inodes;
+                quota.dqb_isoftlimit = inodes;
+                quota.dqb_valid = QIF_LIMITS;
+                if (syscall(SYS_quotactl_fd, box, QCMD(Q_SETQUOTA, USRQUOTA), uid, &quota) < 0) {
+                    Die("quotactl_fd (the box's filesystem must be mounted with usrquota): %m");
                 }
             }
-            endmntent(f);
-            return best_dev;
-        }
-
-      public:
-        int processUid;     /// inherited from Process
-        int blockQuota;     /// limit on disk quota blocks alloc
-        int inodeQuota;     /// number of allocated inodes
-
-        void applyQuota() {
-            if (!blockQuota)
-                return; // no disk quota set
-
-            char cwd[PATH_MAX];
-            if (!getcwd(cwd, sizeof(cwd)))
-                Die("getcwd: %m");
-
-            char* dev = findDevice(cwd);
-            if (!dev)
-                Die("Cannot identify filesystem which contains %s", cwd);
-            Msg("Quota: std::mapped path %s to a filesystem on %s\n", cwd, dev);
-
-            // Sanity check
-            struct stat devStat, cwdStat;
-            if (stat(dev, &devStat) < 0)
-                Die("Cannot identify block device %s: %m", dev);
-            if (!S_ISBLK(devStat.st_mode))
-                Die("Expected that %s is a block device", dev);
-            if (stat(".", &cwdStat) < 0)
-                Die("Cannot stat cwd: %m");
-            if (cwdStat.st_dev != devStat.st_rdev)
-                Die("%s", Base::StrCat("Identified ", cwd, " as a filesystem on ", dev, ", but it is obviously false").c_str());
-
-            // Set disk quotas
-            struct dqblk dq;
-            bzero(&dq, sizeof(dq));
-            dq.dqb_bhardlimit = blockQuota;    /* absolute limit on disk quota blocks alloc */
-            dq.dqb_bsoftlimit = blockQuota;    /* preferred limit on disk quota blocks */
-            dq.dqb_ihardlimit = inodeQuota;    /* maximum number of allocated inodes */
-            dq.dqb_isoftlimit = inodeQuota;    /* preferred inode limit */
-            dq.dqb_valid = QIF_LIMITS;          /* limit blocks and inodes */
-
-            // Apply disk quotas
-            if (quotactl(QCMD(Q_SETQUOTA, USRQUOTA), dev, processUid, (caddr_t)&dq) < 0)
-                Die("Cannot set disk quota: %m");
-
-            Msg("Quota: Set block quota %d and inode quota %d\n", blockQuota, inodeQuota);
-            free(dev);
-        }
-
-        DiskQuota(const ProcessConfig::DiskQuota& config, int processUid) {
-            this->processUid = processUid;
-            this->blockQuota = config.blockQuota;
-            this->inodeQuota = config.inodeQuota;
+            close(box);
+            Msg("Quota: %d KB and %d inodes per user\n", blocksKB, inodes);
         }
     };
 
-    /*** whitelists all files that can be accesed / used in box ***/
-    /// set specifie file permissions inside the sandbox.
-    /// the default usage is to whitelist everything in the box folder
-    /// and blacklist files.
-    /// * usefull when more isolated processes need to comunicate but they want
-    /// * to keep stuff from each other
+    /// What the program's uid may do with the box's files, as a named entry in each one's ACL; by default, anything at the top level
     class FilePermissions {
-        struct Permission {
-            std::string path;
-            std::string mode;    /// std::string with xwr, each of them only once
+        struct Rule {
+            std::string pattern;  /// a path under the box, or a glob of them
+            int perm;             /// ACL_READ | ACL_WRITE | ACL_EXECUTE, or 0 to remove the uid's entry
         };
 
-        std::vector<Permission> allPermissions;
-        bool fullPermissionsOverFolder;
+        std::vector<Rule> rules = {{".", ACL_READ | ACL_WRITE | ACL_EXECUTE}, {"*", ACL_READ | ACL_WRITE | ACL_EXECUTE}};
 
-        std::string modeFromString(const std::string& mode) {
-            int bitmask = 0;
-
+        static int permFromString(const std::string& mode) {
+            int perm = 0;
             for (char c : mode) {
-                if (c == 'x' or c == 'X') {
-                    bitmask |= (1 << 0);
-                }
-                if (c == 'w' or c == 'W') {
-                    bitmask |= (1 << 1);
-                }
-                if (c == 'r' or c == 'R') {
-                    bitmask |= (1 << 2);
-                }
-            }
-
-            std::string result = "";
-            std::string modes = "xwr";
-            for (int i = 0; i < 3; i += 1) {
-                if (bitmask & (1 << i)) {
-                    result += modes[i];
+                if (c == 'r' || c == 'R') {
+                    perm |= ACL_READ;
+                } else if (c == 'w' || c == 'W') {
+                    perm |= ACL_WRITE;
+                } else if (c == 'x' || c == 'X') {
+                    perm |= ACL_EXECUTE;
+                } else {
+                    Die("Unknown permission '%c', expected r, w or x", c);
                 }
             }
+            return perm;
+        }
 
-            return result;
+        static bool hasWildcards(const std::string& pattern) {
+            return pattern.find_first_of("*?[") != std::string::npos;
         }
 
         /// A path expanded as the shell would, minus symlinks: root must not follow one the program left in the box
-        static std::vector<std::string> expandPath(const std::string& path) {
+        static std::vector<std::string> expandPath(const std::string& pattern) {
             glob_t matches;
-            if (glob(path.c_str(), GLOB_NOCHECK, nullptr, &matches) != 0) {
-                Die("glob %s: %m", path.c_str());
+            int result = glob(pattern.c_str(), GLOB_NOMAGIC, nullptr, &matches);
+            if (result == GLOB_NOMATCH) {
+                return {};
+            }
+            if (result != 0) {
+                Die("glob %s failed", pattern.c_str());
             }
 
             std::vector<std::string> paths;
@@ -382,107 +223,112 @@ class Rules {
             }
         }
 
-        /// The files stay out of a failure's message: setfacl names the one it failed on in error.txt, and a quote breaks the meta file
-        static void runSetfacl(const std::string& command) {
-            int status = system(Base::StrCat("/usr/bin/setfacl ", command).c_str());
-            if (status < 0) {
-                Die("system(setfacl): %m");
+        /// A file's ACL as the kernel stores it, or the one its mode bits amount to when it has none
+        static std::vector<posix_acl_xattr_entry> readAcl(const std::string& path, mode_t mode) {
+            char buffer[4096];
+            ssize_t size = lgetxattr(path.c_str(), "system.posix_acl_access", buffer, sizeof(buffer));
+            if (size < 0 && errno == ENODATA) {
+                return {{ACL_USER_OBJ, (__le16)((mode >> 6) & 7), (__le32)ACL_UNDEFINED_ID},
+                        {ACL_GROUP_OBJ, (__le16)((mode >> 3) & 7), (__le32)ACL_UNDEFINED_ID},
+                        {ACL_OTHER, (__le16)(mode & 7), (__le32)ACL_UNDEFINED_ID}};
             }
-            if (!WIFEXITED(status)) {
-                Die("setfacl was killed by signal %d", WTERMSIG(status));
+            if (size < 0) {
+                Die("getxattr %s: %m", path.c_str());
             }
-            if (WEXITSTATUS(status) != 0) {
-                Die("setfacl exited with status %d", WEXITSTATUS(status));
+            posix_acl_xattr_header* header = (posix_acl_xattr_header*)buffer;
+            size_t entries = (size - sizeof(*header)) / sizeof(posix_acl_xattr_entry);
+            if (size < (ssize_t)sizeof(*header) || header->a_version != POSIX_ACL_XATTR_VERSION ||
+                sizeof(*header) + entries * sizeof(posix_acl_xattr_entry) != (size_t)size) {
+                Die("Unexpected ACL on %s", path.c_str());
             }
+            posix_acl_xattr_entry* first = (posix_acl_xattr_entry*)(header + 1);
+            return std::vector<posix_acl_xattr_entry>(first, first + entries);
         }
 
-        /// A file name is the program's to choose, so it must reach setfacl as one argument that isn't an option
-        static std::string shellArgument(const std::string& path) {
-            std::string quoted = path[0] == '-' ? "'./" : "'";
-            for (char c : path) {
-                quoted += c == '\'' ? std::string("'\\''") : std::string(1, c);
+        /// The uid's entry becomes perm (none removes it), the mask follows, and the top level shuts out everyone else
+        static void setAcl(const std::string& path, uid_t uid, int perm, bool clearOther, bool mayVanish) {
+            struct stat st;
+            if (lstat(path.c_str(), &st) < 0) {
+                /// The other jail of an interactive run may delete a file meanwhile
+                if (errno == ENOENT && mayVanish) {
+                    return;
+                }
+                Die("lstat %s: %m", path.c_str());
             }
-            return quoted + "'";
+            if (S_ISLNK(st.st_mode)) {
+                Die("%s is a symlink", path.c_str());
+            }
+
+            std::vector<posix_acl_xattr_entry> acl;
+            for (posix_acl_xattr_entry entry : readAcl(path, st.st_mode)) {
+                if (entry.e_tag == ACL_MASK || (entry.e_tag == ACL_USER && entry.e_id == uid)) {
+                    continue;
+                }
+                if (entry.e_tag == ACL_OTHER && clearOther) {
+                    entry.e_perm = 0;
+                }
+                acl.push_back(entry);
+            }
+            if (perm) {
+                acl.push_back({ACL_USER, (__le16)perm, (__le32)uid});
+            }
+            /// The mask caps every named entry and the owning group, so it is their union; without named entries there is none
+            int mask = 0;
+            bool named = false;
+            for (const posix_acl_xattr_entry& entry : acl) {
+                if (entry.e_tag == ACL_USER || entry.e_tag == ACL_GROUP || entry.e_tag == ACL_GROUP_OBJ) {
+                    mask |= entry.e_perm;
+                    named |= entry.e_tag != ACL_GROUP_OBJ;
+                }
+            }
+            if (named) {
+                acl.push_back({ACL_MASK, (__le16)mask, (__le32)ACL_UNDEFINED_ID});
+            }
+            std::sort(acl.begin(), acl.end(), [](const posix_acl_xattr_entry& a, const posix_acl_xattr_entry& b) {
+                return a.e_tag != b.e_tag ? a.e_tag < b.e_tag : a.e_id < b.e_id;
+            });
+
+            std::vector<char> buffer(sizeof(posix_acl_xattr_header) + acl.size() * sizeof(posix_acl_xattr_entry));
+            ((posix_acl_xattr_header*)buffer.data())->a_version = POSIX_ACL_XATTR_VERSION;
+            memcpy(buffer.data() + sizeof(posix_acl_xattr_header), acl.data(), acl.size() * sizeof(posix_acl_xattr_entry));
+            if (lsetxattr(path.c_str(), "system.posix_acl_access", buffer.data(), buffer.size(), 0) < 0) {
+                Die("setxattr %s: %m", path.c_str());
+            }
         }
 
       public:
-        void addRule(std::string path, std::string mode) {
-            Permission p;
-            p.path = path;
-            p.mode = modeFromString(mode);
-            allPermissions.push_back(p);
-        }
-
-        void addRule(std::string rule) {
-            auto colonLocation = rule.find(":");
-            if (colonLocation == std::string::npos) {
-                addRule(rule, "");
-            } else {
-                addRule(rule.substr(0, colonLocation), rule.substr(colonLocation + 1, rule.size()));
+        FilePermissions(const vector<string>& ruleStrings) {
+            for (const std::string& rule : ruleStrings) {
+                size_t colon = rule.find(':');
+                int perm = colon == std::string::npos ? 0 : permFromString(rule.substr(colon + 1));
+                rules.push_back({rule.substr(0, colon), perm});
             }
         }
 
-        /// Jails sharing a box take turns, on a lock out of the programs' reach, since concurrent setfacl runs fail
+        /// Jails sharing a box take turns, on a lock out of the programs' reach, since both rewrite the shared entries' ACLs
         void applyRules(uid_t uid, int lockFd) {
-            char* pwd = get_current_dir_name();
-            if (strcmp(pwd, "/box") != 0) {
-                Die("FilePermissions::applyRules must be run in /box | %s\n", pwd);
-            }
-
-            if (geteuid()) {
-                Die("FilePermissions::applyRules must be run as root\n");
-            }
-
             if (flock(lockFd, LOCK_EX) < 0) {
                 Die("flock: %m");
             }
 
-            /// delete all privileges for other
-            if (chmod(".", 0750) < 0) {
-                Die("chmod .: %m");
-            }
-            for (const std::string& path : expandPath("*")) {
-                /// The other jail of an interactive run may delete a file meanwhile
-                if (chmod(path.c_str(), 0750) < 0 && errno != ENOENT) {
-                    Die("chmod %s: %m", path.c_str());
+            /// The last rule naming a path wins
+            struct Wanted {
+                int perm;
+                bool mayVanish;
+            };
+            std::map<std::string, Wanted> wanted;
+            for (const Rule& rule : rules) {
+                for (const std::string& path : expandPath(rule.pattern)) {
+                    wanted[path] = {rule.perm, hasWildcards(rule.pattern)};
                 }
             }
 
-            std::string command = "";
-            for (const Permission& rule : allPermissions) {
-                std::string files = "";
-                for (const std::string& path : expandPath(rule.path)) {
-                    files += " " + shellArgument(path);
-                }
-                /// An -m with no files after it would merge into the next rule's
-                if (files.empty()) {
-                    continue;
-                }
-
-                if (rule.mode == "") {
-                    command += Base::StrCat("-x u:", uid, files, " ");
-                } else {
-                    command += Base::StrCat("-m u:", uid, ":", rule.mode, files, " ");
-                }
+            for (const auto& [path, want] : wanted) {
+                bool topLevel = path.find('/') == std::string::npos;
+                Msg(2, "ACL: %s gets %d for uid %d\n", path.c_str(), want.perm, uid);
+                setAcl(path, uid, want.perm, topLevel, want.mayVanish);
             }
-
-            Msg("permissions command:\t%s\n", command.c_str());
-            runSetfacl(command);
             close(lockFd);
-        }
-
-        FilePermissions(const ProcessConfig::FilePermissions& config) {
-            this->fullPermissionsOverFolder = config.fullPermissionsOverFolder;
-
-            if (fullPermissionsOverFolder) {
-                addRule(".", "rxw");
-                addRule("*", "rxw");
-            }
-
-            for (auto rule : config.rules) {
-                addRule(rule);
-            }
         }
     };
 };
-
