@@ -6,11 +6,11 @@
 #include <string>
 #include <vector>
 
+#include "die.hpp"
 #include "runstats.hpp"
 
 #include "cpp-base/string_utils.hpp"
 #include "cpp-base/os.hpp"
-#include "cpp-base/logger.hpp"
 
 /// CGroups v2 API - simplified for unified hierarchy
 class CGroups {
@@ -20,15 +20,15 @@ class CGroups {
     CGroups() {
         this->cgName = "";
         this->cgMemoryLimitKB = 0;
-        this->useCGTiming = 1;
     }
 
     string cgName;         /// name of the control group
     int cgMemoryLimitKB;        /// memory limit for that cg
-    int useCGTiming;            /// query process time from control group - default = true
 
     static const int kCGBufferSize = 4096;
     char buffer[kCGBufferSize];
+
+    static const int kLeftoverWaitMs = 10000;
 
   protected:
     /// Build path to cgroup v2 file: /sys/fs/cgroup/group_name/parameter
@@ -109,7 +109,7 @@ class CGroups {
             if (maybe) {
                 goto fail_close;
             } else {
-                Base::Die("Cannot set %s to %s: %m", path.c_str(), value.c_str());
+                Base::Die("%s: %m", Base::StrCat("Cannot set ", path, " to ", value).c_str());
             }
         }
 
@@ -128,27 +128,23 @@ class CGroups {
         return success;
     }
 
-  public:
-    static void SanityCheck() {
-        /// sanity check the presence of cgroups in the system
-        if (!Base::DirExists(cgRootPath.c_str())) {
-            Base::Die("Control group filesystem at %s not mounted", cgRootPath.c_str());
-        }
-        
-        /// Verify we have cgroups v2
-        struct statfs fs;
-        if (statfs(cgRootPath.c_str(), &fs) < 0) {
-            Base::Die("Cannot stat cgroup filesystem at %s: %m", cgRootPath.c_str());
-        }
-        
-        // cgroup2 magic number is 0x63677270
-        if (fs.f_type != 0x63677270) {
-            Base::Die("Only cgroups v2 is supported. Found filesystem type: 0x%lx", fs.f_type);
-        }
-        
-        Base::Msg("Using cgroups v2\n");
+    bool populated() {
+        readStat("cgroup.events");
+        return strstr(buffer, "populated 1") != nullptr;
     }
 
+    /// A run never shares its control group with what an earlier one left behind, as when its keeper was killed
+    void killLeftovers() {
+        writeStat("cgroup.kill", "1");
+        for (int waitedMs = 0; populated(); waitedMs += 1) {
+            if (waitedMs == kLeftoverWaitMs) {
+                Base::Die("Processes left in control group %s outlived cgroup.kill", cgName.c_str());
+            }
+            usleep(1000);
+        }
+    }
+
+  public:
     void init(int cgId) {
         cgName = Base::StrCat("box-", cgId);
         Base::Msg("Using control group %s\n", cgName.c_str());
@@ -163,6 +159,7 @@ class CGroups {
         string path = Base::StrCat(cgRootPath, '/', cgName);
         if (stat(path.c_str(), &st) >= 0 || errno != ENOENT) {
             Base::Msg("Control group %s already exists, trying to empty it.\n", path.c_str());
+            killLeftovers();
             if (rmdir(path.c_str()) < 0) {
                 Base::Die("Failed to reset control group %s: %m", path.c_str());
             }
@@ -218,16 +215,6 @@ class CGroups {
         return fd;
     }
 
-    void enter(int procsFd) {
-        Base::Msg("Entering control group %s\n", cgName.c_str());
-
-        string pid = Base::StrCat(getpid());
-        if (write(procsFd, pid.c_str(), pid.size()) != (ssize_t)pid.size()) {
-            Base::Die("Cannot enter control group %s: %m", cgName.c_str());
-        }
-        close(procsFd);
-    }
-
     /// removes cgroup
     void cleanup() {
         // Check if any processes are still in the cgroup
@@ -260,22 +247,22 @@ class CGroups {
     }
 
     RunStats::TimeStat getFullTime() {
-        RunStats::TimeStat timeStat;
-        timeStat.wallTimeMs = 0;
-        timeStat.cpuTimeMs = cpuTimeMs();
+        RunStats::TimeStat timeStat = {0, 0, 0, 0};
 
         if (readStat("cpu.stat", true)) {
-            // v2 format: user_usec 12345\nsystem_usec 67890\n...
+            // v2 format: usage_usec 12345\nuser_usec 12345\nsystem_usec 67890\n...
+            char* usage_line = strstr(buffer, "usage_usec ");
             char* user_line = strstr(buffer, "user_usec ");
             char* system_line = strstr(buffer, "system_usec ");
-            
+
+            if (usage_line) {
+                timeStat.cpuTimeNs = atoll(usage_line + strlen("usage_usec ")) * 1000;
+            }
             if (user_line) {
-                unsigned long long userUsec = atoll(user_line + strlen("user_usec "));
-                timeStat.userTimeMs = userUsec / 1000; // Convert usec to ms
+                timeStat.userTimeNs = atoll(user_line + strlen("user_usec ")) * 1000;
             }
             if (system_line) {
-                unsigned long long systemUsec = atoll(system_line + strlen("system_usec "));
-                timeStat.systemTimeMs = systemUsec / 1000; // Convert usec to ms
+                timeStat.systemTimeNs = atoll(system_line + strlen("system_usec ")) * 1000;
             }
         }
 

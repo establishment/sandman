@@ -1,4 +1,6 @@
+#include <fcntl.h>
 #include <getopt.h>
+#include <sys/stat.h>
 
 #include <cstring>
 
@@ -6,40 +8,14 @@
 #include <vector>
 
 #include "config_json_impl.hpp"
+#include "die.hpp"
 #include "lib.hpp"
 
-#include "cpp-base/logger.hpp"
 #include "cpp-base/string_utils.hpp"
 #include "cxxopts/cxxopts.hpp"
 
 using namespace std;
 using namespace Base;
-
-char** CopyArguments(int argc, char** argv) {
-    char** new_argv = (char**)malloc((argc + 1) * sizeof(char*));
-    new_argv[argc] = nullptr;
-    for (int i = 0; i < argc; i += 1) {
-        int len = strlen(argv[i]);
-        char* txt = (char*)malloc(len * sizeof(char));
-        for (int j = 0; j < len; j += 1) {
-            txt[j] = argv[i][j];
-        }
-        txt[len] = '\0';
-        new_argv[i] = txt;
-    }
-
-    return new_argv;
-}
-
-void DeleteArgumentsCopy(char** argv) {
-    char** start = argv;
-    while (*argv != nullptr) {
-        delete *argv;
-        argv++;
-    }
-
-    delete start;
-}
 
 struct CommandLineConfig : public ProcessConfig {
     double cpuTimeLimitS;
@@ -50,9 +26,9 @@ struct CommandLineConfig : public ProcessConfig {
 
 vector<string> all_options = {
     "box-id",    "process-id", "verbose",      "meta",         "time",      "wall-time",       "extra-time",
-    "memory",    "stack",      "stdin",        "stdout",       "stderr",    "interactive",     "full-env",
+    "memory",    "stack",      "stdin",        "stdout",       "stderr",    "interactive",
     "env",       "permission", "quota-blocks", "quota-inodes", "file-size", "chdir",           "share-net",
-    "processes", "init",       "run",          "cleanup",      "help",      "legacy-meta-json"};
+    "processes", "init",       "run",          "cleanup",      "help",      "include-dir"};
 
 int LevenshteinDistance(const string& a, const string& b) {
     vector<vector<int>> d(a.size() + 1, vector<int>(b.size() + 1, 0));
@@ -128,7 +104,7 @@ cxxopts::Options AddOptions(CommandLineConfig& config) {
         cxxopts::value<int>(config.verboseLevel)->default_value("0")->implicit_value("+1"));
 
     options.add_options("Config")(  //
-        "meta", "Output run stats to specified file (empty = stdout)",
+        "meta", "Output run stats to specified file (none = not written)",
         cxxopts::value<string>(config.metaFile)->default_value("")->implicit_value("metares.txt"), "FILE");
 
     options.add_options("Time")(  //
@@ -173,10 +149,7 @@ cxxopts::Options AddOptions(CommandLineConfig& config) {
         cxxopts::value<vector<ProcessConfig::DirRules::DirRule>>(config.dirRules.rules));
 
     options.add_options("Rules")(  //
-        "full-env", "Inherit full environment of the parent process");
-
-    options.add_options("Rules")(  //
-        "env", "Chnage environment variable <var> to <val> if <val> is provided. Else inherit the value.",
+        "env", "Set environment variable <var> to <val>, or inherit isolate's own value without <val>. Nothing else is passed, and the command is searched on the PATH given here.",
         cxxopts::value<vector<string>>(config.environment.rules), "var[=val(inherited)]");
 
     options.add_options("Rules")(  //
@@ -189,7 +162,7 @@ cxxopts::Options AddOptions(CommandLineConfig& config) {
 
     options.add_options("Rules")(  //
         "quota-inodes", "Set disk quota to <arg> inodes",
-        cxxopts::value<int>(config.diskQuota.blockQuota)->default_value("0"));
+        cxxopts::value<int>(config.diskQuota.inodeQuota)->default_value("0"));
 
     options.add_options("Rules")(  //
         "file-size", "tMax size (in KB) of files that can be created(0 is unlimited)",
@@ -205,9 +178,6 @@ cxxopts::Options AddOptions(CommandLineConfig& config) {
     options.add_options("Rules")(  //
         "processes", "Enable multiple processes (at most <max> of them) (0 is unlimited)",
         cxxopts::value<int>(config.maxProcesses)->default_value("1")->implicit_value("0"), "max");
-
-    options.add_options("Rules")(  //
-        "legacy-meta-json", "Print meta file in old format");
 
     options.add_options()("i,init", "Initialize sandbox");
     options.add_options()("r,run", "Run given command in sandbox (positional arguments)");
@@ -268,10 +238,6 @@ ProcessConfig ParseCommandLineArguments(int argc, char** argv) {
         p_config.swapPipeOpenOrder = true;
     }
 
-    if (options.count("full-env")) {
-        p_config.environment.passEnvironment = true;
-    }
-
     if (options.count("share-net")) {
         p_config.shareNetwork = true;
     }
@@ -302,7 +268,12 @@ ProcessConfig ParseCommandLineArguments(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-    DieLogToFile("/eval/isolate.log");
+    /// Root's log, so nobody else may write to it, whatever mode an earlier isolate left it with
+    int logFd = open("/eval/isolate.log", O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0640);
+    if (logFd < 0 || fchmod(logFd, 0640) < 0) {
+        Die("open /eval/isolate.log: %m");
+    }
+    Base::die_fd = logFd;
 
     auto config = ParseCommandLineArguments(argc, argv);
 

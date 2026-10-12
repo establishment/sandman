@@ -2,7 +2,7 @@ build:
 	$(MAKE) -s get-submodules
 	$(MAKE) -s remove-symlinks
 	$(MAKE) -s symlinks
-	g++ -std=c++17 -O2 -rdynamic src/bin.cpp -o isolate
+	g++ -std=c++17 -O2 -Wall -rdynamic src/bin.cpp -o isolate
 	$(MAKE) -s remove-symlinks
 
 get-submodules:

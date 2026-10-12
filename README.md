@@ -16,7 +16,7 @@ Design goals
 
 Requirements
 ------------
-- Linux kernel 5.8+ with cgroups v2 enabled (default on most modern distributions)
+- Linux kernel 5.19+ with cgroups v2 and Landlock enabled (`landlock` in `/sys/kernel/security/lsm`): Ubuntu 24.04+ by default, Ubuntu 22.04 only on its HWE kernel
 - cgroups v2 mounted at `/sys/fs/cgroup` (standard on systemd systems)
 
 Installation
@@ -50,6 +50,8 @@ It creates a sandbox in /tmp
 Forks a child which will execute that command later.
 Puts the child into a cgroup, limits it's permissions (like limiting the maximum number of processes which can be spawned from it, limiting max-file size, stack size)
 Mounts selected linux core folders like /bin into it read-only.
+Forbids the command to create symlinks (Landlock), and never follows one itself when it opens the command's files as root.
+Enters the cgroup and drops root only as the last step before the exec, so none of the setup is billed to the command.
 Aplies disk-quotas and sandbox permissions.
 Changes the root of the binary into that sandbox folder.
 Runs the command from the forked child.
@@ -64,17 +66,17 @@ Beside that, it should work as expected. (never tested, it will be integrated in
 Examples
 --------
 ```sh
-sudo ./box --init
+sudo ./isolate --box-id=0 --init
 sudo cp my_binary /tmp/box/0/box
-sudo ./box --run --meta -- ./my_binary
+sudo ./isolate --box-id=0 --run --meta -- ./my_binary
 ```
 
-To get the run stats, run
+To get the run stats, with its times as integer nanoseconds at the resolution the platform has, run
 ```sh
 cat metares.txt
 ```
 
 For more options like limiting time, memory or permissions use
 ```sh
-./box --help
+./isolate --help
 ```

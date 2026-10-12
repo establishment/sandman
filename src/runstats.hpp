@@ -26,11 +26,12 @@ class RunStats {
         INTERNAL_ERROR,                 /// Internal Jail Error
     };
 
+    /// Nanoseconds, at the resolution the platform has: a Linux cgroup accounts in microseconds
     struct TimeStat {
-        unsigned long long wallTimeMs;      /// wall clock time usage in ms
-        unsigned long long cpuTimeMs;       /// CPU usage time in ms
-        unsigned long long userTimeMs;      /// CPU usage in user mode in ms
-        unsigned long long systemTimeMs;    /// CPU usage in kernel (system) mode in ms
+        unsigned long long wallTimeNs;    /// wall clock time from the exec
+        unsigned long long cpuTimeNs;     /// CPU time, user and kernel
+        unsigned long long userTimeNs;    /// CPU time in user mode
+        unsigned long long systemTimeNs;  /// CPU time in kernel mode
     };
 
     RunStats() {
@@ -105,7 +106,7 @@ class RunStats {
     }
 };
 
-const std::string RunStats::version = "2.1";
+const std::string RunStats::version = "2.3";
 
 template<>
 void RunStats::update(const rusage& usage) {
@@ -121,8 +122,8 @@ void RunStats::update(const RunStats::ResultCode& resultCode) {
 
 template<>
 void RunStats::update(const RunStats::TimeStat& timeStat) {
-    updateValue(this->timeStat.wallTimeMs, timeStat.wallTimeMs);
-    updateValue(this->timeStat.cpuTimeMs, timeStat.cpuTimeMs);
-    updateValue(this->timeStat.userTimeMs, timeStat.userTimeMs);
-    updateValue(this->timeStat.systemTimeMs, timeStat.systemTimeMs);
+    updateValue(this->timeStat.wallTimeNs, timeStat.wallTimeNs);
+    updateValue(this->timeStat.cpuTimeNs, timeStat.cpuTimeNs);
+    updateValue(this->timeStat.userTimeNs, timeStat.userTimeNs);
+    updateValue(this->timeStat.systemTimeNs, timeStat.systemTimeNs);
 }

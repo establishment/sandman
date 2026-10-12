@@ -32,16 +32,12 @@ AutoJson::Json::operator ::ProcessConfig::DiskQuota() {
 namespace AutoJson {
 template<>
 AutoJson::Json::Json(const ::ProcessConfig::Environment& rhs) : type(JsonType::OBJECT), content(new std::map<std::string, Json>()) {
-	(*this)["useDefaultRules"] = rhs.useDefaultRules;
-	(*this)["passEnvironment"] = rhs.passEnvironment;
 	(*this)["rules"] = rhs.rules;
 }
 
 template<>
 AutoJson::Json::operator ::ProcessConfig::Environment() {
 	::ProcessConfig::Environment obj;
-	obj.useDefaultRules = (*this)["useDefaultRules"].Get<int>();
-	obj.passEnvironment = (*this)["passEnvironment"].Get<int>();
 	obj.rules = (*this)["rules"].Get<vector<string>>();
 	return obj;
 }

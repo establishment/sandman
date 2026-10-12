@@ -1,11 +1,14 @@
 
 #include <errno.h>
+#include <fcntl.h>
 #include <glob.h>
 #include <limits.h>
 #include <mntent.h>
+#include <sys/file.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/quota.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <map>
@@ -13,10 +16,10 @@
 #include <vector>
 
 #include "cpp-base/string_utils.hpp"
-#include "cpp-base/logger.hpp"
 #include "cpp-base/os.hpp"
 
 #include "config.hpp"
+#include "die.hpp"
 
 
 using Base::Die;
@@ -26,18 +29,11 @@ using Base::Msg;
 class Rules {
   public:
     /*** Environment rules ***/
-    /// set environment rules for the isolated program
+    /// The program's environment is only what the rules name: nothing of isolate's own leaks into the box
     class Environment {
       public:
         Environment(const ProcessConfig::Environment& config)
                 : allRules({}) {
-            this->passEnvironment = config.passEnvironment;
-
-            for (int itr = 0; environ[itr]; itr += 1) {
-                auto rule = getRule(environ[itr]);
-                allRules[rule.first] = rule.second;
-            }
-
             addDefaultRules();
 
             for (const auto& rule : config.rules) {
@@ -45,20 +41,18 @@ class Rules {
             }
         }
 
+        /// A rule without a value inherits the variable from isolate's own environment, if set there
         std::pair<std::string, std::string> getRule(const std::string& commandLineRule) {
-            // search for "="
             std::size_t equalPosition = commandLineRule.find("=");
 
             if (equalPosition == std::string::npos) {
-                // equal not found, inherit from global environment.
-                return {commandLineRule, allRules[commandLineRule]};
+                const char* inherited = getenv(commandLineRule.c_str());
+                return {commandLineRule, inherited ? inherited : ""};
             } else {
                 return {commandLineRule.substr(0, equalPosition),
                                  commandLineRule.substr(equalPosition + 1)};
             }
         };
-
-        int passEnvironment;
 
         std::map<std::string, std::string> allRules;
 
@@ -78,7 +72,6 @@ class Rules {
         }
 
         // returns the environment variables in char** format
-        // including the new rules as well as the ones inherited from environ
         char** getEnvironment() {
             int numRules = 0;
             for (auto rule : allRules) {
@@ -220,7 +213,7 @@ class Rules {
                 if (rule.flags & FLAG_FS) {
                     Msg("Mounting %s on %s (flags %lx)\n", rule.localPath.c_str(), rule.boxPath.c_str(), mount_flags);
                     if (mount("none", rootInBox, rule.localPath.c_str(), mount_flags, "") < 0) {
-                        Die("Cannot mount %s on %s: %m", rule.localPath.c_str(), rule.boxPath.c_str());
+                        Die("%s: %m", Base::StrCat("Cannot mount ", rule.localPath, " on ", rule.boxPath).c_str());
                     }
                 } else {
                     mount_flags |= MS_BIND | MS_NOSUID;
@@ -228,7 +221,7 @@ class Rules {
                     // Most mount flags need remount to work
                     if (mount(rule.localPath.c_str(), rootInBox, "none", mount_flags, "") < 0 ||
                         mount(rule.localPath.c_str(), rootInBox, "none", MS_REMOUNT | mount_flags, "") < 0) {
-                        Die("Cannot mount %s on %s: %m", rule.localPath.c_str(), rule.boxPath.c_str());
+                        Die("%s: %m", Base::StrCat("Cannot mount ", rule.localPath, " on ", rule.boxPath).c_str());
                     }
                 }
             }
@@ -293,7 +286,7 @@ class Rules {
             if (stat(".", &cwdStat) < 0)
                 Die("Cannot stat cwd: %m");
             if (cwdStat.st_dev != devStat.st_rdev)
-                Die("Identified %s as a filesystem on %s, but it is obviously false", cwd, dev);
+                Die("%s", Base::StrCat("Identified ", cwd, " as a filesystem on ", dev, ", but it is obviously false").c_str());
 
             // Set disk quotas
             struct dqblk dq;
@@ -389,6 +382,20 @@ class Rules {
             }
         }
 
+        /// The files stay out of a failure's message: setfacl names the one it failed on in error.txt, and a quote breaks the meta file
+        static void runSetfacl(const std::string& command) {
+            int status = system(Base::StrCat("/usr/bin/setfacl ", command).c_str());
+            if (status < 0) {
+                Die("system(setfacl): %m");
+            }
+            if (!WIFEXITED(status)) {
+                Die("setfacl was killed by signal %d", WTERMSIG(status));
+            }
+            if (WEXITSTATUS(status) != 0) {
+                Die("setfacl exited with status %d", WEXITSTATUS(status));
+            }
+        }
+
         /// A file name is the program's to choose, so it must reach setfacl as one argument that isn't an option
         static std::string shellArgument(const std::string& path) {
             std::string quoted = path[0] == '-' ? "'./" : "'";
@@ -415,7 +422,8 @@ class Rules {
             }
         }
 
-        void applyRules(uid_t uid) {
+        /// Jails sharing a box take turns, on a lock out of the programs' reach, since concurrent setfacl runs fail
+        void applyRules(uid_t uid, int lockFd) {
             char* pwd = get_current_dir_name();
             if (strcmp(pwd, "/box") != 0) {
                 Die("FilePermissions::applyRules must be run in /box | %s\n", pwd);
@@ -423,6 +431,10 @@ class Rules {
 
             if (geteuid()) {
                 Die("FilePermissions::applyRules must be run as root\n");
+            }
+
+            if (flock(lockFd, LOCK_EX) < 0) {
+                Die("flock: %m");
             }
 
             /// delete all privileges for other
@@ -455,7 +467,8 @@ class Rules {
             }
 
             Msg("permissions command:\t%s\n", command.c_str());
-            Base::Setfacl(command);
+            runSetfacl(command);
+            close(lockFd);
         }
 
         FilePermissions(const ProcessConfig::FilePermissions& config) {

@@ -18,19 +18,19 @@ AutoJson::Json::operator ::RunStats::ResultCode() {
 namespace AutoJson {
 template<>
 AutoJson::Json::Json(const ::RunStats::TimeStat& rhs) : type(JsonType::OBJECT), content(new std::map<std::string, Json>()) {
-	(*this)["wallTimeMs"] = rhs.wallTimeMs;
-	(*this)["cpuTimeMs"] = rhs.cpuTimeMs;
-	(*this)["userTimeMs"] = rhs.userTimeMs;
-	(*this)["systemTimeMs"] = rhs.systemTimeMs;
+	(*this)["wallTimeNs"] = rhs.wallTimeNs;
+	(*this)["cpuTimeNs"] = rhs.cpuTimeNs;
+	(*this)["userTimeNs"] = rhs.userTimeNs;
+	(*this)["systemTimeNs"] = rhs.systemTimeNs;
 }
 
 template<>
 AutoJson::Json::operator ::RunStats::TimeStat() {
 	::RunStats::TimeStat obj;
-	obj.wallTimeMs = (*this)["wallTimeMs"].Get<unsigned long long>();
-	obj.cpuTimeMs = (*this)["cpuTimeMs"].Get<unsigned long long>();
-	obj.userTimeMs = (*this)["userTimeMs"].Get<unsigned long long>();
-	obj.systemTimeMs = (*this)["systemTimeMs"].Get<unsigned long long>();
+	obj.wallTimeNs = (*this)["wallTimeNs"].Get<unsigned long long>();
+	obj.cpuTimeNs = (*this)["cpuTimeNs"].Get<unsigned long long>();
+	obj.userTimeNs = (*this)["userTimeNs"].Get<unsigned long long>();
+	obj.systemTimeNs = (*this)["systemTimeNs"].Get<unsigned long long>();
 	return obj;
 }
 }  //namespace AutoJson

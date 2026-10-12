@@ -16,14 +16,7 @@ struct ProcessConfig {
     };
 
     struct Environment {
-        int useDefaultRules;   /// LIBC_FATAL_STDERR_=1
-        int passEnvironment;   /// --full-env      inherit environment from system
         vector<string> rules;  /// --env=a=b       custom rules for environment
-
-        Environment() {
-            useDefaultRules = true;
-            passEnvironment = false;
-        }
     };
 
     struct DirRules {
