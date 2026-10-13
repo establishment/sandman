@@ -97,7 +97,7 @@ cxxopts::Options AddOptions(ProcessConfig& config, TimeLimits& timeLimits) {
 
     options.add_options("Rules")(  //
         "processes", "Cap on the processes and threads (0 is unlimited)",
-        cxxopts::value<int>(config.maxProcesses)->default_value("16"), "max");
+        cxxopts::value<int>(config.maxProcesses)->default_value("32"), "max");
 
     options.add_options()("i,init", "Initialize sandbox");
     options.add_options()("r,run", "Run given command in sandbox (positional arguments)");

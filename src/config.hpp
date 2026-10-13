@@ -28,7 +28,7 @@ struct ProcessConfig {
     string redirectStderr;       /// --stderr=file.txt
     string execDirectory;        /// --chdir=dir  the program's working directory, under the box
     int fileSizeLimitKB = 0;     /// --file-size=x  0 is unlimited
-    int maxProcesses = 16;       /// --processes=x  cap on the processes and threads, 0 is unlimited
+    int maxProcesses = 32;       /// --processes=x  cap on the processes and threads, 0 is unlimited
     bool swapPipeOpenOrder = false;  /// --interactive  open stdout before stdin, so two jails on fifos don't deadlock
 
     vector<string> runCommand;  /// the positional arguments, the program and its arguments

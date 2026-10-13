@@ -74,7 +74,7 @@ sudo cp my_binary /tmp/box/0/box
 sudo ./isolate --box-id=0 --run --meta -- ./my_binary
 ```
 
-A run may have at most 16 processes and threads unless `--processes` says otherwise.
+A run may have at most 32 processes and threads unless `--processes` says otherwise, compilers included.
 
 To get the run stats, with its times as integer nanoseconds at the resolution the platform has, run
 ```sh
