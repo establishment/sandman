@@ -19,10 +19,12 @@
 #include <string.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
+#include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <time.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -43,6 +45,19 @@ using Base::Msg;
 using Base::Die;
 
 CGroups cg;
+
+/// Through the pidfd rather than the pid, which another process may have inherited once the jail was reaped
+void killByFd(int pidFd) {
+    syscall(SYS_pidfd_send_signal, pidFd, SIGKILL, NULL, 0);
+}
+
+/// An output stream the keeper carries from a pipe into its file, so the written pages are never the program's memory
+struct Relay {
+    int pipeRead = -1;   /// the keeper's end, -1 once the stream ended
+    int pipeWrite = -1;  /// the program's end, which the keeper closes after the clone
+    int fileFd = -1;
+    unsigned long long bytes = 0;
+};
 
 /// Die in the box sends its whole log entry, of which the message, with its quotes escaped, is what the result can use
 string dieEntryMessage(const string& entry) {
@@ -66,12 +81,15 @@ string dieEntryMessage(const string& entry) {
 /// Watches the jailed process from outside: the limits, and what it ended as
 class ProcessKeeper {
   public:
-    static const int kCheckIntervalMs = 100;  /// how often the limits are checked while the program runs
+    static const int kCheckIntervalMs = 100;  /// how often the limits are checked, whatever the program's output does
+    static const unsigned long long kDrainBudget = 8 << 20;  /// output moved per check of the limits
 
     ProcessConfig config;
     int processPid;
     int pidFd;      /// readable once the process is gone, so a poll sees its end at once
     int errorPipe;  /// the box's Die writes here; close-on-exec, so it hangs up when the program starts
+    Relay* relays;  /// stdout and stderr, where they go to files
+    struct timespec* execClock;  /// written by the box right before the exec, on a page both sides share
 
     /// The wall clock, from the exec of the program; monotonic, so a clock step can't shorten or lengthen a run
     struct timespec wallStart;
@@ -79,13 +97,8 @@ class ProcessKeeper {
     RunStats stats;
     string childError;  /// what Die in the box sent, verbatim, for the log
 
-    ProcessKeeper(const ProcessConfig& config, int processPid, int errorPipe)
-            : config(config), processPid(processPid), errorPipe(errorPipe) {
-        pidFd = syscall(SYS_pidfd_open, processPid, 0);
-        if (pidFd < 0) {
-            Die("pidfd_open: %m");
-        }
-    }
+    ProcessKeeper(const ProcessConfig& config, int processPid, int pidFd, int errorPipe, Relay* relays, struct timespec* execClock)
+            : config(config), processPid(processPid), pidFd(pidFd), errorPipe(errorPipe), relays(relays), execClock(execClock) {}
 
     void startWallClock() {
         clock_gettime(CLOCK_MONOTONIC, &wallStart);
@@ -125,9 +138,41 @@ class ProcessKeeper {
 
     /// The program is its PID namespace's init, and the kernel kills the whole namespace with it
     void killProcess(RunStats::ResultCode reason) {
-        kill(processPid, SIGKILL);
+        killByFd(pidFd);
         stats.processWasKilled = true;
         stats.resultCode = reason;
+    }
+
+    /// Moves what the pipe holds into the file, a bounded amount per call so a program that never stops printing
+    /// still gets its limits checked; past the output cap the stream is dropped and the run is over
+    bool drain(Relay& relay, unsigned long long budget) {
+        unsigned long long cap = config.fileSizeLimitKB ? (unsigned long long)config.fileSizeLimitKB * 1024 : ~0ull;
+        while (relay.pipeRead >= 0 && budget > 0) {
+            if (relay.bytes == cap) {
+                struct pollfd more = {relay.pipeRead, POLLIN, 0};
+                if (poll(&more, 1, 0) <= 0) {
+                    return true;
+                }
+                /// Anything more is over the cap; a hangup with nothing more is the stream's end
+                close(relay.pipeRead);
+                relay.pipeRead = -1;
+                return !(more.revents & POLLIN);
+            }
+            unsigned long long chunk = std::min({cap - relay.bytes, budget, 1ull << 20});
+            ssize_t moved = splice(relay.pipeRead, NULL, relay.fileFd, NULL, chunk, SPLICE_F_NONBLOCK);
+            if (moved > 0) {
+                relay.bytes += moved;
+                budget -= moved;
+            } else if (moved == 0) {
+                close(relay.pipeRead);
+                relay.pipeRead = -1;
+            } else if (errno == EAGAIN) {
+                return true;
+            } else if (errno != EINTR) {
+                Die("splice: %m");
+            }
+        }
+        return true;
     }
 
     string readChildError() {
@@ -146,21 +191,42 @@ class ProcessKeeper {
 
     RunStats run() {
         startWallClock();
-        struct pollfd fds[2] = {{errorPipe, POLLIN, 0}, {pidFd, POLLIN, 0}};
+        struct pollfd fds[4] = {{errorPipe, POLLIN, 0}, {pidFd, POLLIN, 0}, {relays[0].pipeRead, POLLIN, 0}, {relays[1].pipeRead, POLLIN, 0}};
+        unsigned long long nextCheckNs = wallTimeNs() + kCheckIntervalMs * 1000000ull;
         while (true) {
-            int ready = poll(fds, 2, kCheckIntervalMs);
+            unsigned long long nowNs = wallTimeNs();
+            int ready = poll(fds, 4, nowNs < nextCheckNs ? (nextCheckNs - nowNs) / 1000000 + 1 : 0);
             if (ready < 0 && errno != EINTR) {
                 Die("poll: %m");
+            }
+            /// The pipe hanging up is the exec, whose moment the box noted itself; a message on it is a Die, which exits right after
+            if (fds[0].revents) {
+                programStarted = true;
+                if (execClock->tv_sec) {
+                    wallStart = *execClock;
+                } else {
+                    startWallClock();
+                }
+                fds[0].fd = -1;
+            }
+            bool overflowed = false;
+            for (int i = 0; i < 2; i += 1) {
+                if (fds[2 + i].revents) {
+                    overflowed |= !drain(relays[i], kDrainBudget);
+                    fds[2 + i].fd = relays[i].pipeRead;
+                }
+            }
+            if (overflowed) {
+                killProcess(RunStats::OUTPUT_LIMIT_EXCEEDED);
+                break;
             }
             if (fds[1].revents) {
                 break;
             }
-            /// The pipe hanging up is the exec; a message on it is a Die, which exits right after
-            if (fds[0].revents) {
-                programStarted = true;
-                startWallClock();
-                fds[0].fd = -1;
+            if (wallTimeNs() < nextCheckNs) {
+                continue;
             }
+            nextCheckNs += kCheckIntervalMs * 1000000ull;
             RunStats::ResultCode code = checkLimits();
             if (code != RunStats::OK) {
                 killProcess(code);
@@ -178,6 +244,12 @@ class ProcessKeeper {
             }
         }
 
+        /// Every writer is dead with the program (its PID namespace goes with it), so the pipes drain to their end
+        bool overflowed = false;
+        for (int i = 0; i < 2; i += 1) {
+            overflowed |= !drain(relays[i], ~0ull);
+        }
+
         /// An error from inside the box is the run's result, so it reaches the meta file before the jail dies of it
         childError = readChildError();
         if (!childError.empty()) {
@@ -188,6 +260,10 @@ class ProcessKeeper {
 
         updateStats();
         if (stats.processWasKilled) {
+            return stats;
+        }
+        if (overflowed) {
+            stats.resultCode = RunStats::OUTPUT_LIMIT_EXCEEDED;
             return stats;
         }
         Msg("ProcessStatus:%d\n", status);
@@ -219,9 +295,10 @@ class ProcessInitialiser {
   public:
     static int ASyncStart(void*);
 
-    ProcessInitialiser(const ProcessConfig& config, int uid, int gid, int errorPipes[2], int cgroupProcsFd)
+    ProcessInitialiser(const ProcessConfig& config, int uid, int gid, int errorPipes[2], int cgroupProcsFd, Relay* relays,
+                       struct timespec* execClock)
             : config(config), uid(uid), gid(gid), errorPipe(errorPipes[1]), keeperPipe(errorPipes[0]),
-              cgroupProcsFd(cgroupProcsFd) {}
+              cgroupProcsFd(cgroupProcsFd), stdoutFd(relays[0].pipeWrite), stderrFd(relays[1].pipeWrite), execClock(execClock) {}
 
     ProcessConfig config;
     int uid;
@@ -229,6 +306,9 @@ class ProcessInitialiser {
     int errorPipe;
     int keeperPipe;
     int cgroupProcsFd;
+    int stdoutFd;  /// the keeper's relay for stdout, or -1 to open the redirect here
+    int stderrFd;
+    struct timespec* execClock;  /// where the keeper reads the program's start from
 
     /// Dies with its keeper, which alone enforces the limits; a uid change clears it, so it is set again after
     void dieWithKeeper() {
@@ -273,11 +353,13 @@ class ProcessInitialiser {
         if (syscall(SYS_close_range, 3, ~0U, CLOSE_RANGE_CLOEXEC) < 0) {
             Die("close_range: %m");
         }
+        clock_gettime(CLOCK_MONOTONIC, execClock);
         execvp(argv[0], argv);
         Die("execvp(%s): %m", argv[0]);
     }
 
-    /// Refused: user namespaces (they hand out capabilities), kernel subsystems no solution needs, and keys and vsock, which reach other jails
+    /// Refused: user namespaces (they hand out capabilities), kernel subsystems no solution needs, keys and vsock, which reach
+    /// other jails, and resizing a pipe, which would make the keeper wake per page of output
     void denySyscalls() {
         const unsigned CLONE_FLAGS = offsetof(struct seccomp_data, args[0]);
         vector<struct sock_filter> filter = {
@@ -296,9 +378,9 @@ class ProcessInitialiser {
             filter.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EPERM));
             filter.push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)));
         };
-        auto denyValue = [&](unsigned nr, unsigned value) {
+        auto denyValue = [&](unsigned nr, unsigned argument, unsigned value) {
             filter.push_back(BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, nr, 0, 4));
-            filter.push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS, CLONE_FLAGS));
+            filter.push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS, (unsigned)(offsetof(struct seccomp_data, args[0]) + argument * sizeof(__u64))));
             filter.push_back(BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, value, 0, 1));
             filter.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EPERM));
             filter.push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)));
@@ -309,7 +391,8 @@ class ProcessInitialiser {
         };
         denyFlag(SYS_unshare, CLONE_NEWUSER);
         denyFlag(SYS_clone, CLONE_NEWUSER);
-        denyValue(SYS_socket, AF_VSOCK);
+        denyValue(SYS_socket, 0, AF_VSOCK);
+        denyValue(SYS_fcntl, 1, F_SETPIPE_SZ);
         deny(SYS_clone3, ENOSYS);  /// its flags are in a struct the filter can't see; libc falls back to clone
         for (unsigned nr : {SYS_setns, SYS_mount, SYS_umount2, SYS_pivot_root, SYS_open_tree, SYS_move_mount, SYS_fsopen, SYS_fsmount,
                        SYS_mount_setattr, SYS_io_uring_setup, SYS_io_uring_enter, SYS_io_uring_register, SYS_bpf, SYS_userfaultfd,
@@ -434,6 +517,7 @@ class ProcessInitialiser {
         }
     }
 
+    /// Output to a file goes through the keeper's relay; a fifo is opened here, in the order the two sides agreed on
     void setupPipes() {
         auto openStdin = [&]() {
             if (config.redirectStdin.size()) {
@@ -441,7 +525,11 @@ class ProcessInitialiser {
             }
         };
         auto openStdout = [&]() {
-            if (config.redirectStdout.size()) {
+            if (stdoutFd >= 0) {
+                if (dup2(stdoutFd, 1) < 0) {
+                    Die("dup2 stdout: %m");
+                }
+            } else if (config.redirectStdout.size()) {
                 openRedirect(config.redirectStdout, O_WRONLY | O_CREAT | O_TRUNC, 0666, 1);
             }
         };
@@ -454,7 +542,11 @@ class ProcessInitialiser {
             openStdout();
         }
 
-        if (config.redirectStderr.size()) {
+        if (stderrFd >= 0) {
+            if (dup2(stderrFd, 2) < 0) {
+                Die("dup2 stderr: %m");
+            }
+        } else if (config.redirectStderr.size()) {
             openRedirect(config.redirectStderr, O_WRONLY | O_CREAT | O_TRUNC, 0666, 2);
         } else {
             dup2(1, 2);
@@ -510,6 +602,7 @@ class Jailer {
     int gid;
     int cgid;
     int metaFd = -1;
+    int pidFd = -1;  /// the jail, once cloned
 
     Jailer(const ProcessConfig& config) : config(config) {
         if (config.processId < 0 || config.processId >= processesPerBox) {
@@ -592,8 +685,49 @@ class Jailer {
         cg.cleanup();
     }
 
+    /// A redirect to a file is opened here and fed by a pipe, so the output never counts as the program's memory;
+    /// a fifo, as interactive runs and games use, is the program's to open
+    Relay openRelay(int boxFd, const string& path) {
+        Relay relay;
+        struct stat st;
+        if (path.empty() || (fstatat(boxFd, path.c_str(), &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISFIFO(st.st_mode))) {
+            return relay;
+        }
+        struct open_how how;
+        memset(&how, 0, sizeof(how));
+        how.flags = O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC;
+        how.mode = 0666;
+        how.resolve = RESOLVE_NO_SYMLINKS | RESOLVE_BENEATH;
+        relay.fileFd = syscall(SYS_openat2, boxFd, path.c_str(), &how, sizeof(how));
+        if (relay.fileFd < 0) {
+            Die("open(\"%s\"): %m", path.c_str());
+        }
+        /// A fifo put under the name meanwhile opens at once, and is no file to write to
+        if (fstat(relay.fileFd, &st) < 0 || !S_ISREG(st.st_mode)) {
+            Die("%s is not a regular file", path.c_str());
+        }
+        int pipeFds[2];
+        if (pipe2(pipeFds, O_CLOEXEC) < 0) {
+            Die("pipe: %m");
+        }
+        fcntl(pipeFds[1], F_SETPIPE_SZ, 1 << 20);
+        relay.pipeRead = pipeFds[0];
+        relay.pipeWrite = pipeFds[1];
+        return relay;
+    }
+
     void Run() {
         Msg("Start running\n");
+
+        /// Dying of an error of our own still leaves a result, with the error as its message, and no program behind
+        Base::DieExitFunction = [this](std::string entry) {
+            if (pidFd >= 0) {
+                killByFd(pidFd);
+            }
+            RunStats errorStats;
+            errorStats.internalMessage = dieEntryMessage(entry);
+            PrintStats(errorStats);
+        };
 
         if (!Base::DirExists("box")) {
             Die("Box directory not found, did you run 'isolate --init'?");
@@ -608,28 +742,42 @@ class Jailer {
             Die("pipe: %m");
         }
 
+        int boxFd = open("box", O_PATH | O_DIRECTORY | O_CLOEXEC);
+        if (boxFd < 0) {
+            Die("open box: %m");
+        }
+        Relay relays[2] = {openRelay(boxFd, config.redirectStdout), openRelay(boxFd, config.redirectStderr)};
+        close(boxFd);
+
+        /// The exec's moment is the box's to note, since on one CPU the keeper may not run for a while after it
+        struct timespec* execClock = (struct timespec*)mmap(NULL, sizeof(*execClock), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+        if (execClock == MAP_FAILED) {
+            Die("mmap: %m");
+        }
+
         /// The box is a copy of this process, so its stack can be anywhere of ours
         static char boxStack[1 << 20];
-        ProcessInitialiser initialiser(config, uid, gid, errorPipes, cgroupProcsFd);
+        ProcessInitialiser initialiser(config, uid, gid, errorPipes, cgroupProcsFd, relays, execClock);
         /// TODO: the program is its PID namespace's init, which drops signals it raises itself, so abort() ends as SIGSEGV
         int processPid = clone(ProcessInitialiser::ASyncStart, boxStack + sizeof(boxStack),
                                SIGCHLD | CLONE_NEWIPC | CLONE_NEWNET | CLONE_NEWNS | CLONE_NEWPID, &initialiser);
         if (processPid < 0) {
             Die("clone: %m");
         }
+        pidFd = syscall(SYS_pidfd_open, processPid, 0);
+        if (pidFd < 0) {
+            Die("pidfd_open: %m");
+        }
         close(cgroupProcsFd);
         close(errorPipes[1]);
-
-        /// Dying of an error of our own still leaves a result, with the error as its message, and no program behind
-        Base::DieExitFunction = [this, processPid](std::string entry) {
-            kill(processPid, SIGKILL);
-            RunStats errorStats;
-            errorStats.internalMessage = dieEntryMessage(entry);
-            PrintStats(errorStats);
-        };
+        for (Relay& relay : relays) {
+            if (relay.pipeWrite >= 0) {
+                close(relay.pipeWrite);
+            }
+        }
 
         Msg("Start waiting for process\n");
-        ProcessKeeper keeper(config, processPid, errorPipes[0]);
+        ProcessKeeper keeper(config, processPid, pidFd, errorPipes[0], relays, execClock);
         RunStats finalStats = keeper.run();
         PrintStats(finalStats);
         Base::DieExitFunction = nullptr;

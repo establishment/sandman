@@ -50,6 +50,7 @@ It creates a sandbox in /tmp
 Forks a child which will execute that command later.
 Puts the child into a cgroup, limits it's permissions (like limiting the maximum number of processes which can be spawned from it, limiting max-file size, stack size)
 Mounts selected linux core folders like /bin into it read-only, and gives it a /dev and a /tmp of its own.
+Carries the command's stdout and stderr through pipes into their files itself, so what it prints is never counted as its memory.
 Gives the command's uid an ACL entry on the box files its permission rules name, written straight into the files' extended attributes, and shuts everyone else out of the box.
 Forbids the command to create symlinks (Landlock), and never follows one itself when it opens the command's files as root.
 Refuses the system calls a solution has no use for (user namespaces, mounts, io_uring, bpf, keys, vsock) with seccomp.
