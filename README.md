@@ -52,7 +52,7 @@ Puts the child into a cgroup, limits it's permissions (like limiting the maximum
 Mounts selected linux core folders like /bin into it read-only, and gives it a /dev and a /tmp of its own.
 Carries the command's stdout and stderr through pipes into their files itself, so what it prints is never counted as its memory.
 Gives the command's uid an ACL entry on the box files its permission rules name, written straight into the files' extended attributes, and shuts everyone else out of the box.
-Forbids the command to create symlinks (Landlock), and never follows one itself when it opens the command's files as root.
+Forbids the command to create symlinks (Landlock) and hard links (seccomp), and never follows a symlink itself when it opens the command's files or sets their ACLs as root: a run in a box that holds one ends as an internal error.
 Refuses the system calls a solution has no use for (user namespaces, mounts, io_uring, bpf, keys, vsock) with seccomp.
 Enters the cgroup and drops root only as the last step before the exec, so none of the setup is billed to the command.
 Aplies disk-quotas and sandbox permissions.

@@ -1,8 +1,10 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <glob.h>
+#include <linux/openat2.h>
 #include <linux/posix_acl.h>
 #include <linux/posix_acl_xattr.h>
+#include <string.h>
 #include <sys/file.h>
 #include <sys/mount.h>
 #include <sys/quota.h>
@@ -190,7 +192,7 @@ class Rules {
             return pattern.find_first_of("*?[") != std::string::npos;
         }
 
-        /// A path expanded as the shell would, minus symlinks: root must not follow one the program left in the box
+        /// A path expanded as the shell would
         static std::vector<std::string> expandPath(const std::string& pattern) {
             glob_t matches;
             int result = glob(pattern.c_str(), GLOB_NOMAGIC, nullptr, &matches);
@@ -201,32 +203,15 @@ class Rules {
                 Die("glob %s failed", pattern.c_str());
             }
 
-            std::vector<std::string> paths;
-            for (size_t i = 0; i < matches.gl_pathc; i += 1) {
-                if (!traversesSymlink(matches.gl_pathv[i])) {
-                    paths.push_back(matches.gl_pathv[i]);
-                }
-            }
+            std::vector<std::string> paths(matches.gl_pathv, matches.gl_pathv + matches.gl_pathc);
             globfree(&matches);
             return paths;
         }
 
-        static bool traversesSymlink(const std::string& path) {
-            for (size_t end = path.find('/', 1);; end = path.find('/', end + 1)) {
-                struct stat st;
-                if (lstat(path.substr(0, end).c_str(), &st) == 0 && S_ISLNK(st.st_mode)) {
-                    return true;
-                }
-                if (end == std::string::npos) {
-                    return false;
-                }
-            }
-        }
-
         /// A file's ACL as the kernel stores it, or the one its mode bits amount to when it has none
-        static std::vector<posix_acl_xattr_entry> readAcl(const std::string& path, mode_t mode) {
+        static std::vector<posix_acl_xattr_entry> readAcl(const std::string& fdPath, const std::string& path, mode_t mode) {
             char buffer[4096];
-            ssize_t size = lgetxattr(path.c_str(), "system.posix_acl_access", buffer, sizeof(buffer));
+            ssize_t size = getxattr(fdPath.c_str(), "system.posix_acl_access", buffer, sizeof(buffer));
             if (size < 0 && errno == ENODATA) {
                 return {{ACL_USER_OBJ, (__le16)((mode >> 6) & 7), (__le32)ACL_UNDEFINED_ID},
                         {ACL_GROUP_OBJ, (__le16)((mode >> 3) & 7), (__le32)ACL_UNDEFINED_ID},
@@ -247,20 +232,27 @@ class Rules {
 
         /// The uid's entry becomes perm (none removes it), the mask follows, and the top level shuts out everyone else
         static void setAcl(const std::string& path, uid_t uid, int perm, bool clearOther, bool mayVanish) {
-            struct stat st;
-            if (lstat(path.c_str(), &st) < 0) {
+            /// Held open from the check to the change, and reached through no symlink: the box is the program's to rearrange
+            struct open_how how;
+            memset(&how, 0, sizeof(how));
+            how.flags = O_PATH | O_CLOEXEC;
+            how.resolve = RESOLVE_NO_SYMLINKS;
+            int fd = syscall(SYS_openat2, AT_FDCWD, path.c_str(), &how, sizeof(how));
+            if (fd < 0) {
                 /// The other jail of an interactive run may delete a file meanwhile
                 if (errno == ENOENT && mayVanish) {
                     return;
                 }
-                Die("lstat %s: %m", path.c_str());
+                Die("open %s: %m", path.c_str());
             }
-            if (S_ISLNK(st.st_mode)) {
-                Die("%s is a symlink", path.c_str());
+            struct stat st;
+            if (fstat(fd, &st) < 0) {
+                Die("fstat %s: %m", path.c_str());
             }
+            std::string fdPath = "/proc/self/fd/" + std::to_string(fd);  /// the xattr calls take no O_PATH descriptor itself
 
             std::vector<posix_acl_xattr_entry> acl;
-            for (posix_acl_xattr_entry entry : readAcl(path, st.st_mode)) {
+            for (posix_acl_xattr_entry entry : readAcl(fdPath, path, st.st_mode)) {
                 if (entry.e_tag == ACL_MASK || (entry.e_tag == ACL_USER && entry.e_id == uid)) {
                     continue;
                 }
@@ -291,9 +283,10 @@ class Rules {
             std::vector<char> buffer(sizeof(posix_acl_xattr_header) + acl.size() * sizeof(posix_acl_xattr_entry));
             ((posix_acl_xattr_header*)buffer.data())->a_version = POSIX_ACL_XATTR_VERSION;
             memcpy(buffer.data() + sizeof(posix_acl_xattr_header), acl.data(), acl.size() * sizeof(posix_acl_xattr_entry));
-            if (lsetxattr(path.c_str(), "system.posix_acl_access", buffer.data(), buffer.size(), 0) < 0) {
+            if (setxattr(fdPath.c_str(), "system.posix_acl_access", buffer.data(), buffer.size(), 0) < 0) {
                 Die("setxattr %s: %m", path.c_str());
             }
+            close(fd);
         }
 
       public:

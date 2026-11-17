@@ -342,12 +342,13 @@ class ProcessInitialiser {
     void execProgram() {
         char** argv = Base::StringToCharSS(config.runCommand);
         environ = Rules::Environment(config.environmentRules).getEnvironment();
+        /// Before the entry, as the costliest step left; nothing after it makes a refused call
+        denySyscalls();
 
         if (write(cgroupProcsFd, "0", 1) != 1) {
             Die("cgroup.procs: %m");
         }
         close(cgroupProcsFd);
-        denySyscalls();
         setupCredentials();
         /// The program gets its three standard files and nothing else of the jail's; the error pipe's hangup marks the exec
         if (syscall(SYS_close_range, 3, ~0U, CLOSE_RANGE_CLOEXEC) < 0) {
@@ -359,7 +360,7 @@ class ProcessInitialiser {
     }
 
     /// Refused: user namespaces (they hand out capabilities), kernel subsystems no solution needs, keys and vsock, which reach
-    /// other jails, and resizing a pipe, which would make the keeper wake per page of output
+    /// other jails, hard links, a second name for a file root made, and resizing a pipe, which would make the keeper wake per page
     void denySyscalls() {
         const unsigned CLONE_FLAGS = offsetof(struct seccomp_data, args[0]);
         vector<struct sock_filter> filter = {
@@ -396,7 +397,8 @@ class ProcessInitialiser {
         deny(SYS_clone3, ENOSYS);  /// its flags are in a struct the filter can't see; libc falls back to clone
         for (unsigned nr : {SYS_setns, SYS_mount, SYS_umount2, SYS_pivot_root, SYS_open_tree, SYS_move_mount, SYS_fsopen, SYS_fsmount,
                        SYS_mount_setattr, SYS_io_uring_setup, SYS_io_uring_enter, SYS_io_uring_register, SYS_bpf, SYS_userfaultfd,
-                       SYS_perf_event_open, SYS_add_key, SYS_request_key, SYS_keyctl, SYS_kexec_load, SYS_kexec_file_load}) {
+                       SYS_perf_event_open, SYS_add_key, SYS_request_key, SYS_keyctl, SYS_kexec_load, SYS_kexec_file_load,
+                       SYS_link, SYS_linkat}) {
             deny(nr, EPERM);
         }
         filter.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
